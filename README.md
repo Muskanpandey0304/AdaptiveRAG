@@ -90,6 +90,67 @@ python -m src.eval --llm-judge  # also adds an LLM-judged correctness score
 streamlit run app.py
 ```
 
+## Retrieval methods, side by side
+
+Top-3 of each method for 5 real questions (from `eval/questions.json`),
+against the real 26-paper corpus:
+
+**"How many problems are in the GSM8K dataset...?"** — all three methods
+converge on the same 2-3 chunks (ids 544-546, the dataset description in
+`2110.14168v2.pdf`). Strong agreement when a fact is stated plainly once.
+
+**"What was the best model's truthfulness on TruthfulQA...?"** — vector
+and hybrid agree closely (chunks 496, 475, 489/494, all from
+`2109.07958v2.pdf`), but BM25 alone drifts to different pages entirely
+(479, 521, 492) — still the same paper, but further from the actual
+answer. This is exactly the case fusion is for: BM25's lexical match
+and vector's semantic match don't always agree, and RRF fusing both
+landed closer to the vector result here.
+
+**"What biases and limitations of LLM-as-a-judge are identified...?"**
+— the corpus has two relevant papers (the original MT-bench/LLM-judge
+paper, `2306.05685v4.pdf`, and a later survey, `2411.15594v6.pdf`).
+Vector search pulls top hits from *both*; BM25's top hit is the first
+paper's title page (lexically strong, substantively weak); hybrid
+blends both papers' real content. A case where cross-document semantic
+retrieval genuinely added value over pure keyword matching.
+
+Full output (all 5 queries, all 3 methods) was captured during this
+session; the three examples above are the representative patterns that
+showed up across runs.
+
+## Baseline demo (`git tag baseline-simple-rag`)
+
+The simplest possible RAG — plain top-5 vector search, then generate,
+no router, no fusion, no confidence gate — on 3 real questions:
+
+**"What was the best model's truthfulness on TruthfulQA...?"** →
+*"The best model, GPT-3-175B with a helpful prompt, produced 58% true
+answers on TruthfulQA, which is lower than the human performance of
+94%."* Correct, well-grounded — but `citations: []`. The model never
+emitted a `[n]` marker at all, so citation parsing correctly found
+nothing to extract; a good answer with no traceable source.
+
+**"By how many percentage points does ARES beat RAGAS...?"** → *"[n]
+59.9 percentage points on context relevance and 14.4 percentage
+points on answer relevance."* The literal string `[n]` instead of a
+real citation number — the model copied the prompt's template
+placeholder verbatim rather than filling it in. (The 59.9 vs. the
+`expected_answer`'s 59.3 is the same paper-internal inconsistency
+documented in Evaluation below, not a new error.)
+
+**"Why does TruthfulQA find that larger models can be less
+truthful?"** → *"[n3] According to the text, larger models generally
+do worse... with the largest GPT-Neo/J being 17% less truthful than a
+model 60x smaller."* Specific, correct, well-grounded content — with
+`[n3]` as the citation marker instead of `[3]`.
+
+All 3 answers are factually solid; 2 of 3 have a broken citation
+format. This is the same small-model instruction-following gap the
+full evaluation's correctness grading surfaced at scale (see below) —
+visible here in just 3 examples, from the simplest baseline, before
+the router or confidence gating ever enter the picture.
+
 ## Evaluation
 
 Real run: 26 arXiv papers (NLP/LLM evaluation research, 2161 chunks),
