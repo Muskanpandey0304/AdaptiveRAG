@@ -127,6 +127,53 @@ class Retriever:
             for chunk_id in ranked_ids
         ]
 
+    def expand_neighbors(self, hits: list[Hit], window: int = 1) -> list[Hit]:
+        """Add each hit's immediately adjacent chunks (same source, within
+        `window` positions on either side), so an answer split across a
+        chunk boundary isn't missing half its context.
+
+        Chunk ids are sequential within a source document (see
+        src/ingest.py), so id-1/id+1 are physically adjacent chunks -- but
+        only when they share the *same* source, since the last chunk of
+        one PDF and the first chunk of the next happen to sit at adjacent
+        ids too.
+
+        A neighbor inherits its anchor hit's score (it was never scored by
+        retrieval itself) and is tagged via hit.meta["neighbor_of"] so
+        callers can tell an anchor from an added neighbor. Already-included
+        ids are never duplicated. Hits are returned grouped by cluster in
+        ascending chunk_id order (not retrieval-rank order), so the
+        context reads like a contiguous passage.
+        """
+        seen_ids = {hit.chunk_id for hit in hits}
+        expanded: list[Hit] = []
+        for hit in hits:
+            cluster_ids = [hit.chunk_id]
+            for offset in range(1, window + 1):
+                for neighbor_id in (hit.chunk_id - offset, hit.chunk_id + offset):
+                    if not (0 <= neighbor_id < len(self.chunks)):
+                        continue
+                    if self.chunks[neighbor_id]["source"] != hit.chunk["source"]:
+                        continue
+                    cluster_ids.append(neighbor_id)
+
+            for neighbor_id in sorted(cluster_ids):
+                if neighbor_id in seen_ids and neighbor_id != hit.chunk_id:
+                    continue  # already added via an earlier cluster or another hit
+                seen_ids.add(neighbor_id)
+                if neighbor_id == hit.chunk_id:
+                    expanded.append(hit)
+                else:
+                    expanded.append(
+                        Hit(
+                            chunk_id=neighbor_id,
+                            score=hit.score,
+                            chunk=self.chunks[neighbor_id],
+                            meta={"neighbor_of": hit.chunk_id},
+                        )
+                    )
+        return expanded
+
     def rerank(self, query: str, hits: list[Hit], k: int) -> list[Hit]:
         """Re-score `hits` with a cross-encoder and return the top k.
 

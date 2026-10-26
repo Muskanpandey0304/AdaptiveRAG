@@ -13,7 +13,7 @@ import faiss
 import pytest
 
 from src.indexer import build_bm25_index, build_vector_index
-from src.retrievers import Retriever, _fuse_rrf
+from src.retrievers import Hit, Retriever, _fuse_rrf
 
 
 def _chunks() -> list[dict]:
@@ -96,3 +96,41 @@ def test_rerank_respects_k_and_sorts_best_first(retriever) -> None:
 
 def test_rerank_handles_empty_hits(retriever) -> None:
     assert retriever.rerank("anything", [], k=3) == []
+
+
+def test_expand_neighbors_adds_adjacent_same_source_chunks(retriever) -> None:
+    anchor = Hit(chunk_id=3, score=0.9, chunk=retriever.chunks[3])
+    expanded = retriever.expand_neighbors([anchor], window=1)
+    ids = [h.chunk_id for h in expanded]
+    assert ids == [2, 3, 4]
+    assert expanded[0].meta.get("neighbor_of") == 3
+    assert expanded[1] is anchor
+    assert expanded[2].meta.get("neighbor_of") == 3
+
+
+def test_expand_neighbors_dedupes_overlapping_clusters(retriever) -> None:
+    # chunk 3 is already in chunk 2's neighbor window, so it must appear
+    # exactly once in the output, not once as a neighbor and once as its
+    # own anchor.
+    hit_a = Hit(chunk_id=2, score=0.9, chunk=retriever.chunks[2])
+    hit_b = Hit(chunk_id=3, score=0.8, chunk=retriever.chunks[3])
+    expanded = retriever.expand_neighbors([hit_a, hit_b], window=1)
+    ids = [h.chunk_id for h in expanded]
+    assert len(ids) == len(set(ids))
+    assert {2, 3}.issubset(set(ids))
+
+
+def test_expand_neighbors_does_not_cross_source_boundary(tmp_path) -> None:
+    chunks = [
+        {"id": 0, "text": "last chunk of document A talks about endings.", "source": "a.pdf", "page": 5},
+        {"id": 1, "text": "first chunk of document B talks about beginnings.", "source": "b.pdf", "page": 1},
+        {"id": 2, "text": "second chunk of document B talks about middles.", "source": "b.pdf", "page": 1},
+    ]
+    boundary_retriever = _build_retriever(tmp_path, chunks)
+    anchor = Hit(chunk_id=1, score=0.5, chunk=chunks[1])
+
+    expanded = boundary_retriever.expand_neighbors([anchor], window=1)
+
+    ids = [h.chunk_id for h in expanded]
+    assert 0 not in ids  # adjacent id, but a different source -- must not be pulled in
+    assert ids == [1, 2]

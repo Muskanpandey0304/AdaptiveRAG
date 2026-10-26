@@ -64,7 +64,18 @@ def _normalize_not_found(answer: Answer) -> Answer:
     return Answer(text=NOT_FOUND_TEXT, citations=[], tokens_in=answer.tokens_in, tokens_out=answer.tokens_out, latency_s=answer.latency_s)
 
 
-def _run_hybrid(query: str, use_rerank: bool) -> tuple[Answer, float, list[Hit]]:
+def _expand_if_enabled(hits: list[Hit], expand_neighbors: bool) -> list[Hit]:
+    """Apply neighbor expansion (if enabled) as the last step before
+    generation -- after retrieval/rerank and the confidence check, since a
+    low-confidence miss shouldn't pay for it, and expanding is about
+    giving the LLM fuller context for chunks already judged relevant, not
+    about re-ranking candidates."""
+    if not expand_neighbors or not hits:
+        return hits
+    return _get_retriever().expand_neighbors(hits, window=1)
+
+
+def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[Answer, float, list[Hit]]:
     """Hybrid retrieval + generation. Shared by the hybrid route and by
     keyword-route escalation, since escalation *is* "run the hybrid flow"."""
     hits = _get_retriever().hybrid_search(query, TOP_K)
@@ -76,10 +87,11 @@ def _run_hybrid(query: str, use_rerank: bool) -> tuple[Answer, float, list[Hit]]
 
     if confidence < VECTOR_MIN_SIM:
         return _not_found_answer(), confidence, hits
+    hits = _expand_if_enabled(hits, expand_neighbors)
     return _normalize_not_found(answer_with_context(query, hits)), confidence, hits
 
 
-def _run_vector(query: str) -> tuple[Answer, float, list[Hit]]:
+def _run_vector(query: str, expand_neighbors: bool) -> tuple[Answer, float, list[Hit]]:
     """Plain top-TOP_K vector search then generate -- the Step 6 baseline,
     reachable via force_route="vector" so eval can compare the router
     against it."""
@@ -88,6 +100,7 @@ def _run_vector(query: str) -> tuple[Answer, float, list[Hit]]:
 
     if confidence < VECTOR_MIN_SIM:
         return _not_found_answer(), confidence, hits
+    hits = _expand_if_enabled(hits, expand_neighbors)
     return _normalize_not_found(answer_with_context(query, hits)), confidence, hits
 
 
@@ -109,13 +122,25 @@ def _log(result: Result, query: str) -> None:
         f.write(json.dumps(record) + "\n")
 
 
-def ask(query: str, force_route: str | None = None, use_rerank: bool = False) -> Result:
+def ask(
+    query: str,
+    force_route: str | None = None,
+    use_rerank: bool = False,
+    expand_neighbors: bool = False,
+) -> Result:
     """Answer `query`, routing it automatically unless `force_route` is set.
 
     `force_route` in {"direct", "keyword", "hybrid", "vector"} bypasses
     both the router and keyword-route escalation, so eval can measure each
     strategy in isolation. "vector" is the Step 6 plain-vector baseline --
     not a route the router itself ever picks, only reachable via this.
+
+    `expand_neighbors`, if True, adds each retrieved chunk's immediately
+    adjacent chunks (same source, see Retriever.expand_neighbors) right
+    before generation, to fix answers split across a chunk boundary.
+    Applied only on an actual answer attempt (not a confidence-gated
+    miss), and `result.hits` reflects the expanded set, since that's what
+    was actually available to the LLM.
     """
     start = time.perf_counter()
 
@@ -136,15 +161,16 @@ def ask(query: str, force_route: str | None = None, use_rerank: bool = False) ->
         confidence = hits[0].score if hits else 0.0
         if force_route is None and confidence < BM25_MIN_SCORE:
             escalated = True
-            answer, confidence, hits = _run_hybrid(query, use_rerank)
+            answer, confidence, hits = _run_hybrid(query, use_rerank, expand_neighbors)
         else:
+            hits = _expand_if_enabled(hits, expand_neighbors)
             answer = _normalize_not_found(answer_with_context(query, hits))
 
     elif chosen_route == "vector":
-        answer, confidence, hits = _run_vector(query)
+        answer, confidence, hits = _run_vector(query, expand_neighbors)
 
     else:  # "hybrid"
-        answer, confidence, hits = _run_hybrid(query, use_rerank)
+        answer, confidence, hits = _run_hybrid(query, use_rerank, expand_neighbors)
 
     latency_s = time.perf_counter() - start
     result = Result(
