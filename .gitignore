@@ -3,6 +3,7 @@ venv/
 __pycache__/
 *.pyc
 data/index/
+data/raw/*.pdf
 logs/*.jsonl
 eval/results.md
 eval/to_grade.csv
