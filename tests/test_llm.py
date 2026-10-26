@@ -26,3 +26,27 @@ def test_generate_returns_nonempty_text() -> None:
     """A basic call should succeed and return a non-empty answer."""
     result = generate("Say OK")
     assert result.text.strip() != ""
+
+
+def test_ollama_call_caps_output_and_is_deterministic(monkeypatch) -> None:
+    """Regression: with no num_predict, a looping model produced a ~209K-char answer."""
+    import src.llm as llm_module
+    from src.config import LLM_MAX_TOKENS, LLM_TEMPERATURE
+
+    seen = {}
+
+    class _Msg:
+        content = "ok"
+
+    class _Resp:
+        message = _Msg()
+        prompt_eval_count = 1
+        eval_count = 1
+
+    def fake_chat(model, messages, options=None):
+        seen["options"] = options
+        return _Resp()
+
+    monkeypatch.setattr(llm_module.ollama, "chat", fake_chat)
+    llm_module.generate("hi")
+    assert seen["options"] == {"num_predict": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE}

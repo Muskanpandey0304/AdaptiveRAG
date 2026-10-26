@@ -151,3 +151,53 @@ def test_centroid_similarity_raises_without_a_built_centroid(tmp_path) -> None:
     retriever_without_centroid = _build_retriever(tmp_path, _chunks(), with_centroid=False)
     with pytest.raises(RuntimeError):
         retriever_without_centroid.centroid_similarity("anything")
+
+
+def _parent_child_retriever(tmp_path) -> Retriever:
+    """Two parents (ids 0, 1), each split into two children (child ids 0-3)."""
+    parents = [
+        {"id": 0, "text": "Alpha one. Alpha two. Beta one. Beta two.", "source": "a.pdf", "page": 1},
+        {"id": 1, "text": "Gamma one. Gamma two. Delta one. Delta two.", "source": "a.pdf", "page": 2},
+    ]
+    children = [
+        {"id": 0, "text": "Alpha one. Alpha two.", "source": "a.pdf", "page": 1, "parent_id": 0},
+        {"id": 1, "text": "Beta one. Beta two.", "source": "a.pdf", "page": 1, "parent_id": 0},
+        {"id": 2, "text": "Gamma one. Gamma two.", "source": "a.pdf", "page": 2, "parent_id": 1},
+        {"id": 3, "text": "Delta one. Delta two.", "source": "a.pdf", "page": 2, "parent_id": 1},
+    ]
+    retriever = _build_retriever(tmp_path, children)
+    with open(tmp_path / "parents.json", "w", encoding="utf-8") as f:
+        json.dump(parents, f)
+    return Retriever(
+        chunks_path=tmp_path / "chunks.json",
+        faiss_path=tmp_path / "faiss.index",
+        bm25_path=tmp_path / "bm25.pkl",
+        centroid_path=tmp_path / "centroid.npy",
+    )
+
+
+def test_to_parents_collapses_siblings_and_returns_parent_text(tmp_path) -> None:
+    retriever = _parent_child_retriever(tmp_path)
+    children = [
+        Hit(chunk_id=1, score=0.9, chunk=retriever.chunks[1], meta={"vector_sim": 0.4}),
+        Hit(chunk_id=0, score=0.8, chunk=retriever.chunks[0], meta={"vector_sim": 0.7}),
+        Hit(chunk_id=3, score=0.7, chunk=retriever.chunks[3], meta={"vector_sim": 0.5}),
+    ]
+    parents = retriever.to_parents(children)
+
+    assert [h.chunk_id for h in parents] == [0, 1]  # siblings 1 and 0 -> one parent, best-ranked first
+    assert parents[0].chunk["text"] == retriever.parents[0]["text"]  # parent text, not the child's
+    assert parents[0].score == 0.9  # score of the best-ranked child
+    assert parents[0].meta["child_id"] == 1
+    assert parents[0].meta["vector_sim"] == 0.7  # best cosine among siblings
+
+
+def test_to_parents_is_a_noop_without_parents(retriever) -> None:
+    hits = retriever.vector_search("FastAPI", k=3)
+    assert retriever.to_parents(hits) == hits
+
+
+def test_rerank_scores_are_probabilities(retriever) -> None:
+    candidates = retriever.hybrid_search("FastAPI dependency injection", k=5)
+    reranked = retriever.rerank("FastAPI dependency injection", candidates, k=5)
+    assert all(0.0 <= h.score <= 1.0 for h in reranked)

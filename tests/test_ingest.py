@@ -86,3 +86,19 @@ def test_print_five_random_chunks(capsys) -> None:
     for chunk in random.sample(chunks, min(5, len(chunks))):
         print(f"\n--- chunk {chunk['id']} (source={chunk['source']}, page={chunk['page']}) ---")
         print(chunk["text"][:300])
+
+
+def test_make_children_link_to_parents_and_stay_on_the_same_page() -> None:
+    from src.ingest import make_children
+
+    parents = chunk_pages([_page("doc.pdf", 1, 300), _page("doc.pdf", 2, 300)])
+    children = make_children(parents)
+
+    assert [c["id"] for c in children] == list(range(len(children)))
+    assert len(children) > len(parents)  # children are smaller, so more of them
+    parent_by_id = {p["id"]: p for p in parents}
+    for child in children:
+        parent = parent_by_id[child["parent_id"]]
+        assert (child["source"], child["page"]) == (parent["source"], parent["page"])
+        assert child["text"] in parent["text"]  # a child is a span of its parent
+    assert {c["parent_id"] for c in children} == set(parent_by_id)  # no parent left without children

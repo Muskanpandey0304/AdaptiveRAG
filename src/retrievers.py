@@ -45,6 +45,12 @@ class Retriever:
     Relies on the invariant from src/ingest.py that chunk ids are exactly
     0..len(chunks)-1 in list order, which is also the order both indexes
     were built in -- so a chunk's id doubles as its position in both.
+
+    Parent-child: the indexes are built over small *child* chunks (each
+    carries a `parent_id`); `to_parents` swaps retrieved children for their
+    larger parent chunks, which is what the generator should read. If no
+    parents.json sits next to chunks.json (an index built before this
+    feature, or a plain test fixture), every chunk is simply its own parent.
     """
 
     def __init__(
@@ -53,9 +59,17 @@ class Retriever:
         faiss_path: Path = FAISS_PATH,
         bm25_path: Path = BM25_PATH,
         centroid_path: Path = CENTROID_PATH,
+        parents_path: Path | None = None,
     ) -> None:
         with open(chunks_path, encoding="utf-8") as f:
             self.chunks: list[dict] = json.load(f)
+        # Derived from chunks_path (not a global default) so a Retriever
+        # pointed at a temp dir never picks up the real project's parents.
+        parents_path = Path(parents_path) if parents_path else Path(chunks_path).with_name("parents.json")
+        self.parents: list[dict] | None = None
+        if parents_path.exists():
+            with open(parents_path, encoding="utf-8") as f:
+                self.parents = json.load(f)
         self.faiss_index = faiss.read_index(str(faiss_path))
         with open(bm25_path, "rb") as f:
             self.bm25_index = pickle.load(f)
@@ -148,6 +162,44 @@ class Retriever:
             for chunk_id in ranked_ids
         ]
 
+    @property
+    def _context_chunks(self) -> list[dict]:
+        """The chunks the LLM reads: parents if present, else the chunks."""
+        return self.parents if self.parents is not None else self.chunks
+
+    def to_parents(self, hits: list[Hit]) -> list[Hit]:
+        """Replace retrieved child hits with their parent chunks.
+
+        Several children of one parent collapse into a single parent hit
+        (kept at the position and score of the best-ranked child, so
+        ranking and confidence are unchanged); the parent's chunk text is
+        what reaches the generator. `hit.chunk_id` becomes the parent id,
+        and `meta["child_id"]` records which child matched. A no-op when
+        there are no parents.
+        """
+        if self.parents is None:
+            return hits
+        parent_hits: list[Hit] = []
+        position_by_parent: dict[int, int] = {}
+        for hit in hits:
+            parent_id = hit.chunk["parent_id"]
+            if parent_id in position_by_parent:
+                existing = parent_hits[position_by_parent[parent_id]]
+                # Fusion keeps the best vector cosine seen for the parent.
+                if "vector_sim" in hit.meta:
+                    existing.meta["vector_sim"] = max(existing.meta.get("vector_sim", 0.0), hit.meta["vector_sim"])
+                continue
+            position_by_parent[parent_id] = len(parent_hits)
+            parent_hits.append(
+                Hit(
+                    chunk_id=parent_id,
+                    score=hit.score,
+                    chunk=self.parents[parent_id],
+                    meta={**hit.meta, "child_id": hit.chunk_id},
+                )
+            )
+        return parent_hits
+
     def expand_neighbors(self, hits: list[Hit], window: int = 1) -> list[Hit]:
         """Add each hit's immediately adjacent chunks (same source, within
         `window` positions on either side), so an answer split across a
@@ -166,15 +218,16 @@ class Retriever:
         ascending chunk_id order (not retrieval-rank order), so the
         context reads like a contiguous passage.
         """
+        context = self._context_chunks
         seen_ids = {hit.chunk_id for hit in hits}
         expanded: list[Hit] = []
         for hit in hits:
             cluster_ids = [hit.chunk_id]
             for offset in range(1, window + 1):
                 for neighbor_id in (hit.chunk_id - offset, hit.chunk_id + offset):
-                    if not (0 <= neighbor_id < len(self.chunks)):
+                    if not (0 <= neighbor_id < len(context)):
                         continue
-                    if self.chunks[neighbor_id]["source"] != hit.chunk["source"]:
+                    if context[neighbor_id]["source"] != hit.chunk["source"]:
                         continue
                     cluster_ids.append(neighbor_id)
 
@@ -189,7 +242,7 @@ class Retriever:
                         Hit(
                             chunk_id=neighbor_id,
                             score=hit.score,
-                            chunk=self.chunks[neighbor_id],
+                            chunk=context[neighbor_id],
                             meta={"neighbor_of": hit.chunk_id},
                         )
                     )
@@ -197,6 +250,13 @@ class Retriever:
 
     def rerank(self, query: str, hits: list[Hit], k: int) -> list[Hit]:
         """Re-score `hits` with a cross-encoder and return the top k.
+
+        Returned scores are relevance probabilities in 0-1: this
+        sentence-transformers version's CrossEncoder.predict already applies
+        a sigmoid for single-label models like bge-reranker, so they are used
+        as-is (applying another sigmoid squashes everything into 0.5-0.73 and
+        wrecks any threshold). Verified: relevant pair ~0.998, irrelevant
+        ~0.00004.
 
         The cross-encoder model is loaded lazily (only the first time
         rerank() is actually called) since most queries never use it.

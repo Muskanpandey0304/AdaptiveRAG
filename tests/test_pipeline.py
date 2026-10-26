@@ -152,3 +152,26 @@ def test_force_route_direct_bypasses_router(monkeypatch) -> None:
     assert result.route == "direct"
     assert result.reason == "forced"
     assert result.escalated is False
+
+
+def test_rerank_sees_a_wider_pool_than_top_k(wide_synthetic_retriever, monkeypatch) -> None:
+    """Regression: reranking used to receive only the TOP_K hybrid hits, so
+    it could only reshuffle them. It must get the wider RERANK_POOL_K pool."""
+    seen_pool_sizes = []
+    real_rerank = wide_synthetic_retriever.rerank
+
+    def spy(query, hits, k):
+        seen_pool_sizes.append(len(hits))
+        return real_rerank(query, hits, k)
+
+    monkeypatch.setattr(wide_synthetic_retriever, "rerank", spy)
+    monkeypatch.setattr("src.pipeline.RERANK_MIN_PROB", 0.0)
+    monkeypatch.setattr(
+        "src.generator.generate",
+        lambda prompt, system=None: LLMResult(text="ok [1]", input_tokens=1, output_tokens=1, latency_s=0.0),
+    )
+
+    result = pipeline.ask("What ASGI server runs FastAPI?", force_route="hybrid", use_rerank=True)
+
+    assert seen_pool_sizes and seen_pool_sizes[0] > pipeline.TOP_K  # 12 chunks in the fixture
+    assert len(result.hits) == pipeline.TOP_K

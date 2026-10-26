@@ -29,19 +29,20 @@ CONFIGS: dict[str, dict] = {
     "vector": {"force_route": "vector", "use_rerank": False},
     "hybrid": {"force_route": "hybrid", "use_rerank": False},
     "hybrid+rerank": {"force_route": "hybrid", "use_rerank": True},
-    "router": {"force_route": None, "use_rerank": False},
+    "router": {"force_route": None, "use_rerank": True},
 }
 
 
-def load_questions() -> list[dict]:
-    """Load eval/questions.json; refuse loudly if it's missing or empty
-    rather than inventing questions."""
-    if not QUESTIONS_PATH.exists():
-        raise SystemExit(f"{QUESTIONS_PATH} not found. Add 40+ real questions there before running eval.")
-    with open(QUESTIONS_PATH, encoding="utf-8") as f:
+def load_questions(path: Path | None = None) -> list[dict]:
+    """Load the questions file (default eval/questions.json); refuse loudly
+    if it's missing or empty rather than inventing questions."""
+    path = path or QUESTIONS_PATH
+    if not path.exists():
+        raise SystemExit(f"{path} not found. Add 40+ real questions there before running eval.")
+    with open(path, encoding="utf-8") as f:
         questions = json.load(f)
     if not questions:
-        raise SystemExit(f"{QUESTIONS_PATH} is empty. Add real questions before running eval.")
+        raise SystemExit(f"{path} is empty. Add real questions before running eval.")
     return questions
 
 
@@ -128,13 +129,14 @@ def summarize_config(records: list[dict]) -> dict:
     }
 
 
-def write_to_grade_csv(all_records: list[dict]) -> None:
+def write_to_grade_csv(all_records: list[dict], path: Path | None = None) -> None:
     """Export every (config, question) answer with an empty `correct`
     column for the user to hand-grade (0/1) -- the default scoring path,
     since correctness numbers are never invented automatically."""
-    TO_GRADE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    path = path or TO_GRADE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["id", "type", "question", "config", "answer", "correct"]
-    with open(TO_GRADE_PATH, "w", encoding="utf-8", newline="") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for record in all_records:
@@ -167,7 +169,9 @@ def llm_judge_correctness(all_records: list[dict], questions_by_id: dict[int, di
     return {config: _mean(scores) for config, scores in scores_by_config.items()}
 
 
-def render_results_md(summaries: dict[str, dict], llm_judged: dict[str, float] | None) -> str:
+def render_results_md(
+    summaries: dict[str, dict], llm_judged: dict[str, float] | None, grade_path: Path | None = None
+) -> str:
     """Build eval/results.md: one table per metric, across all configs."""
     lines = ["# Evaluation Results", ""]
 
@@ -216,7 +220,7 @@ def render_results_md(summaries: dict[str, dict], llm_judged: dict[str, float] |
             lines.append(f"| {config} | {score:.2f} |")
         lines.append("")
     else:
-        lines.append(f"Correctness: hand-grade `{TO_GRADE_PATH}` (fill in the empty `correct` column with 0/1).")
+        lines.append(f"Correctness: hand-grade `{grade_path or TO_GRADE_PATH}` (fill in the empty `correct` column with 0/1).")
         lines.append("")
 
     return "\n".join(lines)
@@ -268,38 +272,64 @@ def tune_thresholds(questions: list[dict]) -> str:
 
 
 def main() -> None:
-    """CLI entry point: run every config over eval/questions.json."""
+    """CLI entry point: run every config over a questions file."""
     parser = argparse.ArgumentParser(description="Evaluate AdaptiveRAG across retrieval configs.")
     parser.add_argument(
         "--llm-judge",
         action="store_true",
         help="Also score correctness with a fixed-rubric LLM judge (labeled 'LLM-judged' in results.md).",
     )
+    parser.add_argument(
+        "--questions",
+        type=Path,
+        default=QUESTIONS_PATH,
+        help="Questions file. A non-default file (e.g. the held-out set) writes results_<name>.md / "
+        "to_grade_<name>.csv and skips threshold tuning, so a held-out set is never tuned on.",
+    )
+    parser.add_argument(
+        "--configs",
+        default=None,
+        help="Comma-separated subset of configs to run (e.g. 'router'). Output files get a "
+        "_<configs> suffix and threshold tuning is skipped, so a partial re-run never overwrites a full one.",
+    )
     args = parser.parse_args()
 
-    questions = load_questions()
+    config_names = list(CONFIGS) if args.configs is None else [c.strip() for c in args.configs.split(",")]
+    unknown = [c for c in config_names if c not in CONFIGS]
+    if unknown:
+        raise SystemExit(f"Unknown config(s) {unknown}; choose from {list(CONFIGS)}")
+
+    is_default = args.questions == QUESTIONS_PATH and args.configs is None
+    suffix = "" if args.questions == QUESTIONS_PATH else f"_{args.questions.stem}"
+    if args.configs is not None:
+        suffix += "_" + "-".join(config_names).replace("+", "")
+    results_path = RESULTS_PATH.with_name(f"results{suffix}.md")
+    grade_path = TO_GRADE_PATH.with_name(f"to_grade{suffix}.csv")
+
+    questions = load_questions(args.questions)
     questions_by_id = {q["id"]: q for q in questions}
 
     summaries = {}
     all_records: list[dict] = []
-    for config_name in CONFIGS:
-        print(f"Running config: {config_name} ({len(questions)} questions)...")
+    for config_name in config_names:
+        print(f"Running config: {config_name} ({len(questions)} questions)...", flush=True)
         records = run_config(config_name, questions)
         all_records.extend(records)
         summaries[config_name] = summarize_config(records)
 
-    write_to_grade_csv(all_records)
+    write_to_grade_csv(all_records, grade_path)
     llm_judged = llm_judge_correctness(all_records, questions_by_id) if args.llm_judge else None
 
-    report = render_results_md(summaries, llm_judged)
-    report += "\n\n" + tune_thresholds(questions) + "\n"
+    report = render_results_md(summaries, llm_judged, grade_path)
+    if is_default:
+        report += "\n\n" + tune_thresholds(questions) + "\n"
 
-    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_PATH, "w", encoding="utf-8") as f:
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(results_path, "w", encoding="utf-8") as f:
         f.write(report)
 
     print(report)
-    print(f"\nWrote {RESULTS_PATH} and {TO_GRADE_PATH}")
+    print(f"\nWrote {results_path} and {grade_path}")
 
 
 if __name__ == "__main__":

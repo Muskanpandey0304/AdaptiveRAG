@@ -13,7 +13,7 @@ from src.pipeline import ask
 st.set_page_config(page_title="AdaptiveRAG", layout="wide")
 st.title("AdaptiveRAG")
 
-use_rerank = st.checkbox("Use reranking (hybrid route only)", value=False)
+use_rerank = st.checkbox("Use reranking (hybrid route only)", value=True)
 query = st.text_input("Ask a question")
 
 if query:

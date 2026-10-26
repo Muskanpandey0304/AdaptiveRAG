@@ -11,10 +11,11 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from src.config import CHUNK_OVERLAP, CHUNK_TOKENS
+from src.config import CHILD_OVERLAP, CHILD_TOKENS, CHUNK_OVERLAP, CHUNK_TOKENS
 
 RAW_DIR = Path("data/raw")
-CHUNKS_PATH = Path("data/index/chunks.json")
+CHUNKS_PATH = Path("data/index/chunks.json")  # child chunks (what gets indexed)
+PARENTS_PATH = Path("data/index/parents.json")  # parent chunks (what the LLM reads)
 
 # Approximate a token as 1.3x a whitespace-split word, per the spec -- good
 # enough for sizing chunks; we don't need an exact tokenizer here.
@@ -122,8 +123,10 @@ def _units_for_paragraph(paragraph: str, max_tokens: float) -> list[str]:
     return units
 
 
-def chunk_pages(pages: list[dict]) -> list[dict]:
-    """Split each page's text into ~CHUNK_TOKENS-token chunks with overlap.
+def chunk_pages(
+    pages: list[dict], chunk_tokens: int = CHUNK_TOKENS, chunk_overlap: int = CHUNK_OVERLAP
+) -> list[dict]:
+    """Split each page's text into ~chunk_tokens-token chunks with overlap.
 
     Splits on paragraph boundaries first, then sentence boundaries (see
     `_units_for_paragraph`). Chunks never cross a page boundary, since a
@@ -132,7 +135,7 @@ def chunk_pages(pages: list[dict]) -> list[dict]:
     """
     chunks: list[dict] = []
     next_id = 0
-    overlap_words = int(CHUNK_OVERLAP / WORDS_TO_TOKENS)
+    overlap_words = int(chunk_overlap / WORDS_TO_TOKENS)
 
     for page in pages:
         paragraphs = [p for p in page["text"].split("\n\n") if p.strip()]
@@ -141,12 +144,12 @@ def chunk_pages(pages: list[dict]) -> list[dict]:
 
         units: list[str] = []
         for paragraph in paragraphs:
-            units.extend(_units_for_paragraph(paragraph, CHUNK_TOKENS))
+            units.extend(_units_for_paragraph(paragraph, chunk_tokens))
 
         current_words: list[str] = []
         for unit in units:
             unit_words = unit.split()
-            if current_words and _approx_tokens(" ".join(current_words)) + _approx_tokens(unit) > CHUNK_TOKENS:
+            if current_words and _approx_tokens(" ".join(current_words)) + _approx_tokens(unit) > chunk_tokens:
                 chunks.append(
                     {"id": next_id, "text": " ".join(current_words), "source": page["source"], "page": page["page"]}
                 )
@@ -163,8 +166,26 @@ def chunk_pages(pages: list[dict]) -> list[dict]:
     return chunks
 
 
+def make_children(parents: list[dict]) -> list[dict]:
+    """Split each parent chunk into small child chunks for indexing.
+
+    Each child is {id, text, source, page, parent_id}; ids are sequential
+    across all children (0..n-1, the same id==index-position invariant the
+    Retriever relies on) and `parent_id` is the parent's own id. A parent
+    never spans pages, so neither does any child -- a child's citation
+    page is always its parent's page. Children are retrieved; the parent's
+    larger text is what gets sent to the LLM.
+    """
+    children: list[dict] = []
+    for parent in parents:
+        page = {"source": parent["source"], "page": parent["page"], "text": parent["text"]}
+        for child in chunk_pages([page], chunk_tokens=CHILD_TOKENS, chunk_overlap=CHILD_OVERLAP):
+            children.append({**child, "id": len(children), "parent_id": parent["id"]})
+    return children
+
+
 def main() -> None:
-    """CLI entry point: ingest data/raw/*.pdf into data/index/chunks.json."""
+    """CLI entry point: ingest data/raw/*.pdf into parents.json + chunks.json."""
     pages = load_pdfs(str(RAW_DIR))
     if not pages:
         print(f"No PDFs found in {RAW_DIR}/. Add PDF files there and re-run.")
@@ -174,12 +195,18 @@ def main() -> None:
     for page in pages:
         page["text"] = clean_text(page["text"], repeated_lines)
 
-    chunks = chunk_pages(pages)
+    parents = chunk_pages(pages)
+    children = make_children(parents)
     CHUNKS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(PARENTS_PATH, "w", encoding="utf-8") as f:
+        json.dump(parents, f, ensure_ascii=False, indent=2)
     with open(CHUNKS_PATH, "w", encoding="utf-8") as f:
-        json.dump(chunks, f, ensure_ascii=False, indent=2)
+        json.dump(children, f, ensure_ascii=False, indent=2)
 
-    print(f"Wrote {len(chunks)} chunks from {len(pages)} pages ({len(set(p['source'] for p in pages))} file(s)) to {CHUNKS_PATH}")
+    print(
+        f"Wrote {len(parents)} parents -> {PARENTS_PATH} and {len(children)} children -> {CHUNKS_PATH} "
+        f"from {len(pages)} pages ({len(set(p['source'] for p in pages))} file(s))"
+    )
 
 
 if __name__ == "__main__":

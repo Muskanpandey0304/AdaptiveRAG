@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import ollama
 
-from src.config import LLM_MODEL, LLM_PROVIDER
+from src.config import LLM_MAX_TOKENS, LLM_MODEL, LLM_PROVIDER, LLM_TEMPERATURE
 
 
 @dataclass
@@ -45,11 +45,13 @@ def _generate_ollama(prompt: str, system: str | None) -> LLMResult:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    options = {"num_predict": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE}
+
     start = time.perf_counter()
     try:
-        response = ollama.chat(model=LLM_MODEL, messages=messages)
+        response = ollama.chat(model=LLM_MODEL, messages=messages, options=options)
     except Exception:
-        response = ollama.chat(model=LLM_MODEL, messages=messages)
+        response = ollama.chat(model=LLM_MODEL, messages=messages, options=options)
     latency_s = time.perf_counter() - start
 
     return LLMResult(

@@ -22,6 +22,26 @@ LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
 LLM_MODEL: str = os.getenv("LLM_MODEL", "llama3.1")
 API_KEY: str = os.getenv("API_KEY", "")
 
+# --- Generation limits --------------------------------------------------------
+
+# Hard cap on generated tokens per call. Without one, a small local model that
+# falls into a repetition loop keeps going until its context fills: one
+# held-out eval answer ran to ~209,000 characters (and dragged that config's
+# mean latency to 63s). Real answers here are well under 200 tokens.
+LLM_MAX_TOKENS = 512
+
+# Answer-prompt version for the generator ("v1", "v1r" or "v2"; see
+# DECISIONS.md for the A/B). "v1" is the original prompt. "v1r" is v1 plus one
+# retry when the reply has no answer text (a 3B model often answers with just
+# "[1]"). "v2" is a reworded prompt (complete sentences, no citation-only
+# replies) plus the same retry. Override with the PROMPT_VERSION env var so
+# eval can compare versions on identical code.
+PROMPT_VERSION: str = os.getenv("PROMPT_VERSION", "v1r")
+
+# Deterministic decoding, so eval numbers don't move between runs and a
+# repeated question gets a repeated answer.
+LLM_TEMPERATURE = 0.0
+
 # --- Embedding and reranking models ----------------------------------------
 
 # BGE small: a strong, small, open embedding model. "small" keeps the project
@@ -40,8 +60,16 @@ RERANK_MODEL = "BAAI/bge-reranker-base"
 
 # Target chunk size in (approximate) tokens, and overlap between consecutive
 # chunks so an answer near a chunk boundary isn't split away from its context.
-CHUNK_TOKENS = 400
-CHUNK_OVERLAP = 50
+#
+# Parent-child chunking: the *child* chunks (CHILD_TOKENS) are what gets
+# embedded and BM25-indexed -- small spans match a query precisely. Each
+# child points at a larger *parent* chunk (CHUNK_TOKENS), and the parent's
+# text is what the LLM actually reads, so an answer is never cut off at a
+# small chunk's edge. CHUNK_TOKENS/CHUNK_OVERLAP size the parents.
+CHUNK_TOKENS = 600
+CHUNK_OVERLAP = 60
+CHILD_TOKENS = 120
+CHILD_OVERLAP = 20
 
 # --- Retrieval ---------------------------------------------------------------
 
@@ -53,6 +81,11 @@ TOP_K = 5
 # reorder.
 CANDIDATES_K = 20
 
+# How many fused (child) candidates are handed to the reranker. The
+# cross-encoder only helps if it sees more than the TOP_K it will keep --
+# reranking exactly TOP_K hits just shuffles the same five.
+RERANK_POOL_K = 30
+
 # Reciprocal Rank Fusion constant: higher RRF_K flattens the score curve so
 # rank differences matter less; 60 is the commonly used default from the
 # original RRF paper.
@@ -60,8 +93,24 @@ RRF_K = 60
 
 # --- Confidence thresholds (placeholders; tuned for real in Step 8) --------
 
-BM25_MIN_SCORE = 5.0
-VECTOR_MIN_SIM = 0.45
+# Re-measured on the parent-child index (55 eval questions, retrieval only;
+# see DECISIONS.md). In-sample, so keep a margin and re-check if the corpus
+# or chunk sizes change.
+#
+# BM25 top-parent score: scoped questions min 17.7, so 5.0 never fired. At 15
+# only a weak keyword match escalates to the hybrid path (which has the
+# reranker + centroid gates), and no scoped question did in this sample.
+BM25_MIN_SCORE = 15.0
+# Best-child cosine: scoped min 0.665 (p10 0.73); 0.60 answers every scoped
+# question and drops half of the off-topic ones that 0.45 let through.
+VECTOR_MIN_SIM = 0.60
+
+# Confidence floor on the rerank path (bge-reranker relevance probability,
+# 0-1). Scoped questions' top hit scored >= 0.84; off-topic ones were
+# 0.01/0.04/0.47 or >= 0.95 (those are caught by the centroid gate below),
+# so anything in 0.5-0.8 is equivalent on this data; 0.5 is the model's
+# natural boundary.
+RERANK_MIN_PROB = 0.5
 
 # Corpus-level signal (added post-spec): minimum cosine similarity between
 # a query and the whole corpus's centroid embedding (see

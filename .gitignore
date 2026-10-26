@@ -6,6 +6,7 @@ data/index/
 data/raw/*.pdf
 logs/*.jsonl
 eval/results.md
+eval/results_*.md
 eval/to_grade*.csv
 .pytest_cache/
 .claude/

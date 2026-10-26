@@ -1,0 +1,382 @@
+[
+  {
+    "id": 101,
+    "question": "What percentage of HumanEval problems does Codex-S solve with a single sample?",
+    "type": "exact",
+    "expected_answer": "37.7% (Codex-S, the version further fine-tuned on correctly implemented standalone functions).",
+    "gold_source": "2107.03374v2.pdf",
+    "gold_pages": [
+      2
+    ]
+  },
+  {
+    "id": 102,
+    "question": "How accurate is the GPT-judge metric that TruthfulQA fine-tunes to evaluate truthfulness automatically?",
+    "type": "exact",
+    "expected_answer": "A GPT-3 model fine-tuned on human truthfulness evaluations reaches 90-96% accuracy on held-out models.",
+    "gold_source": "2109.07958v2.pdf",
+    "gold_pages": [
+      3
+    ]
+  },
+  {
+    "id": 103,
+    "question": "How many steps do the GSM8K problems take to solve?",
+    "type": "exact",
+    "expected_answer": "Between 2 and 8 steps.",
+    "gold_source": "2110.14168v2.pdf",
+    "gold_pages": [
+      3
+    ]
+  },
+  {
+    "id": 104,
+    "question": "How many MT-bench questions and expert votes do the MT-Bench authors release?",
+    "type": "exact",
+    "expected_answer": "80 MT-bench questions and 3K expert votes (plus 30K conversations with human preferences).",
+    "gold_source": "2306.05685v4.pdf",
+    "gold_pages": [
+      3
+    ]
+  },
+  {
+    "id": 105,
+    "question": "What fraction of ChatGPT's responses did HaluEval find to contain hallucinated, unverifiable information on specific topics?",
+    "type": "exact",
+    "expected_answer": "About 19.5% of responses.",
+    "gold_source": "2305.11747v3.pdf",
+    "gold_pages": [
+      1,
+      2
+    ]
+  },
+  {
+    "id": 106,
+    "question": "How many customized score rubrics was Prometheus evaluated on against human evaluators, and what Pearson correlation did it reach?",
+    "type": "exact",
+    "expected_answer": "45 customized score rubrics; a Pearson correlation of 0.897 with human evaluators, on par with GPT-4 (0.882).",
+    "gold_source": "2310.08491v2.pdf",
+    "gold_pages": [
+      1,
+      3,
+      9
+    ]
+  },
+  {
+    "id": 107,
+    "question": "By how much does the largest GPT-3 model improve over random chance on MMLU on average?",
+    "type": "exact",
+    "expected_answer": "By almost 20 percentage points on average.",
+    "gold_source": "2009.03300v3.pdf",
+    "gold_pages": [
+      1
+    ]
+  },
+  {
+    "id": 108,
+    "question": "How many WikiBio articles did the SelfCheckGPT authors sample to build their dataset, and from which part of the test set?",
+    "type": "exact",
+    "expected_answer": "238 articles, randomly sampled from the top 20% longest articles of the WikiBio test set.",
+    "gold_source": "2303.08896v3.pdf",
+    "gold_pages": [
+      5
+    ]
+  },
+  {
+    "id": 109,
+    "question": "How many Wikipedia pages were used to construct the WikiEval dataset in the Ragas paper?",
+    "type": "exact",
+    "expected_answer": "50 Wikipedia pages covering events since the start of 2022.",
+    "gold_source": "2309.15217v2.pdf",
+    "gold_pages": [
+      4
+    ]
+  },
+  {
+    "id": 110,
+    "question": "How many questions, across how many categories, are in the Vicuna benchmark used to study evaluator bias?",
+    "type": "exact",
+    "expected_answer": "80 questions spanning 9 distinct question categories.",
+    "gold_source": "2305.17926v2.pdf",
+    "gold_pages": [
+      2
+    ]
+  },
+  {
+    "id": 111,
+    "question": "On how many of the 80 tested queries could Vicuna-13B beat ChatGPT when ChatGPT was the evaluator and the response order was manipulated?",
+    "type": "exact",
+    "expected_answer": "66 of the 80 queries.",
+    "gold_source": "2305.17926v2.pdf",
+    "gold_pages": [
+      1
+    ]
+  },
+  {
+    "id": 112,
+    "question": "How many tasks are in BIG-bench Lite?",
+    "type": "exact",
+    "expected_answer": "24 tasks, a curated subset intended for lightweight evaluation.",
+    "gold_source": "2206.04615v3.pdf",
+    "gold_pages": [
+      5,
+      6,
+      8
+    ]
+  },
+  {
+    "id": 113,
+    "question": "How many language models does HELM evaluate, and on how many scenarios?",
+    "type": "exact",
+    "expected_answer": "30 prominent language models on all 42 scenarios.",
+    "gold_source": "2211.09110v2.pdf",
+    "gold_pages": [
+      1,
+      4
+    ]
+  },
+  {
+    "id": 114,
+    "question": "Which two model sizes of SWE-Llama does the SWE-bench paper release, and what are they based on?",
+    "type": "exact",
+    "expected_answer": "SWE-Llama 7b and 13b, fine-tuned from CodeLlama.",
+    "gold_source": "2310.06770v3.pdf",
+    "gold_pages": [
+      2,
+      7
+    ]
+  },
+  {
+    "id": 115,
+    "question": "How many Khan Academy problems does the AMPS pretraining corpus contain?",
+    "type": "exact",
+    "expected_answer": "Over 100,000 Khan Academy problems with step-by-step solutions (plus over 5 million Mathematica-generated problems).",
+    "gold_source": "2103.03874v2.pdf",
+    "gold_pages": [
+      2
+    ]
+  },
+  {
+    "id": 116,
+    "question": "Over what time period were LiveCodeBench's problems published, and how many LLMs did the authors evaluate?",
+    "type": "exact",
+    "expected_answer": "Between May 2023 and May 2024; 18 base LLMs and 34 instruction-tuned LLMs.",
+    "gold_source": "2403.07974v2.pdf",
+    "gold_pages": [
+      1
+    ]
+  },
+  {
+    "id": 117,
+    "question": "How many human-annotated datapoints does ARES's validation set need, and what is that set used for?",
+    "type": "exact",
+    "expected_answer": "Approximately 150 annotated datapoints or more, used by prediction-powered inference to compute confidence intervals.",
+    "gold_source": "2311.09476v2.pdf",
+    "gold_pages": [
+      2,
+      3
+    ]
+  },
+  {
+    "id": 118,
+    "question": "How does G-Eval turn the LLM's rating into its final score?",
+    "type": "conceptual",
+    "expected_answer": "The evaluator fills in a form with a rating; the output rating tokens' probabilities are used to refine the metric, so the final score is the probability-weighted summation of the output scores.",
+    "gold_source": "2303.16634v3.pdf",
+    "gold_pages": [
+      2
+    ]
+  },
+  {
+    "id": 119,
+    "question": "Why is resolving a SWE-bench issue harder than traditional code generation?",
+    "type": "conceptual",
+    "expected_answer": "It requires understanding and coordinating changes across multiple functions, classes and even files, interacting with execution environments, processing extremely long contexts and complex reasoning.",
+    "gold_source": "2310.06770v3.pdf",
+    "gold_pages": [
+      1
+    ]
+  },
+  {
+    "id": 120,
+    "question": "Why does IFEval compute a loose accuracy in addition to its strict one?",
+    "type": "conceptual",
+    "expected_answer": "To alleviate false negatives: strict matching can misclassify a response that follows the instruction but has extra text (e.g. an added 'P.S.' or markdown), so loose accuracy checks several transformed versions of the response.",
+    "gold_source": "2311.07911v1.pdf",
+    "gold_pages": [
+      4
+    ]
+  },
+  {
+    "id": 121,
+    "question": "How does Length-Controlled AlpacaEval remove length bias?",
+    "type": "conceptual",
+    "expected_answer": "It uses a regression analysis to control for the confounder (output length), estimating the preference that would be expected if the outputs had the same length (a counterfactual).",
+    "gold_source": "2404.04475v2.pdf",
+    "gold_pages": [
+      1
+    ]
+  },
+  {
+    "id": 122,
+    "question": "Why do the Prometheus authors build an open-source evaluator instead of using GPT-4 as the judge?",
+    "type": "conceptual",
+    "expected_answer": "Proprietary LLM evaluators are unreliable for large-scale evaluation and custom criteria because of their closed-source nature, uncontrolled versioning and prohibitive costs.",
+    "gold_source": "2310.08491v2.pdf",
+    "gold_pages": [
+      1,
+      4,
+      8
+    ]
+  },
+  {
+    "id": 123,
+    "question": "How does HaluEval generate its hallucinated samples?",
+    "type": "conceptual",
+    "expected_answer": "With a sampling-then-filtering approach: ChatGPT is instructed (one-pass and conversational instructions) to sample diverse hallucinated answers, then a filtering instruction enhanced by ground-truth examples selects the most plausible, high-quality hallucinated counterpart.",
+    "gold_source": "2305.11747v3.pdf",
+    "gold_pages": [
+      2,
+      4,
+      9
+    ]
+  },
+  {
+    "id": 124,
+    "question": "What limitations of static benchmarks motivate Chatbot Arena?",
+    "type": "conceptual",
+    "expected_answer": "Benchmark questions are not open-ended so they miss flexible real-world use; static test sets can become contaminated over time; and for complex tasks a definitive ground truth is hard or impossible to establish.",
+    "gold_source": "2403.04132v1.pdf",
+    "gold_pages": [
+      1
+    ]
+  },
+  {
+    "id": 125,
+    "question": "What shortcomings did the MMLU authors find in current models' performance?",
+    "type": "conceptual",
+    "expected_answer": "Models have lopsided performance, frequently do not know when they are wrong, and still have near-random accuracy on some socially important subjects such as morality and law; the best models need substantial improvement to reach expert-level accuracy.",
+    "gold_source": "2009.03300v3.pdf",
+    "gold_pages": [
+      1,
+      6,
+      8
+    ]
+  },
+  {
+    "id": 126,
+    "question": "What drawbacks do the LLM-as-a-Judge survey's authors attribute to human evaluation and to automatic metrics like BLEU and ROUGE?",
+    "type": "conceptual",
+    "expected_answer": "Human evaluation is comprehensive but costly, hard to scale and susceptible to inconsistency; BLEU/ROUGE are scalable and consistent but rely on surface-level lexical overlap and fail to capture deeper nuance.",
+    "gold_source": "2411.15594v6.pdf",
+    "gold_pages": [
+      2
+    ]
+  },
+  {
+    "id": 127,
+    "question": "What two contributions does the Chatbot Arena paper highlight about its data and its sampling?",
+    "type": "conceptual",
+    "expected_answer": "It releases a human preference dataset with over 100K pairwise votes collected from Chatbot Arena, and designs an efficient sampling algorithm that actively chooses which model pairs to show, improving sample efficiency.",
+    "gold_source": "2403.04132v1.pdf",
+    "gold_pages": [
+      2
+    ]
+  },
+  {
+    "id": 128,
+    "question": "What is the boiling point of water at sea level?",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 129,
+    "question": "Give me a recipe for chocolate chip cookies.",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 130,
+    "question": "Who is the current president of Brazil?",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 131,
+    "question": "Translate 'good morning' into Spanish.",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 132,
+    "question": "What's the best way to learn to play the guitar?",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 133,
+    "question": "How do I reverse a linked list in Python?",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 134,
+    "question": "Summarize the plot of Romeo and Juliet.",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 135,
+    "question": "Tell me a joke about programmers.",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 136,
+    "question": "What is the tallest mountain in the world?",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 137,
+    "question": "How many calories are in a banana?",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 138,
+    "question": "What is the best large language model available today?",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  },
+  {
+    "id": 139,
+    "question": "What score does GPT-5 achieve on MMLU?",
+    "type": "general",
+    "expected_answer": "Not answerable from the documents; should be refused or answered as a general/direct reply, not from retrieved content.",
+    "gold_source": null,
+    "gold_pages": null
+  }
+]

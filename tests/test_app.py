@@ -76,7 +76,9 @@ def synthetic_retriever(tmp_path, monkeypatch) -> Retriever:
 def test_app_shows_not_found_for_out_of_scope_question(synthetic_retriever) -> None:
     at = AppTest.from_file(APP_PATH)
     at.run()
-    at.text_input[0].input("What is the boiling point of mercury on Mars?").run()
+    # Reranking is on by default in the app; the first run loads the ~1GB
+    # cross-encoder, which takes far longer than AppTest's 3s default.
+    at.text_input[0].input("What is the boiling point of mercury on Mars?").run(timeout=180)
 
     assert not at.exception
     assert any("Not found in the documents." in md.value for md in at.markdown)

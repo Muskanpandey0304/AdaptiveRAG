@@ -10,8 +10,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.config import BM25_MIN_SCORE, CENTROID_MIN_SIM, TOP_K, VECTOR_MIN_SIM
-from src.generator import Answer, answer_direct, answer_with_context
+from src.config import (
+    BM25_MIN_SCORE,
+    CANDIDATES_K,
+    CENTROID_MIN_SIM,
+    RERANK_MIN_PROB,
+    RERANK_POOL_K,
+    TOP_K,
+    VECTOR_MIN_SIM,
+)
+from src.generator import Answer, answer_direct, answer_with_context, is_not_found
 from src.retrievers import Hit, Retriever
 from src.router import route
 
@@ -60,7 +68,7 @@ def _normalize_not_found(answer: Answer) -> Answer:
     Keeps the real token/latency numbers from the LLM call that produced
     it, unlike the confidence-gated `_not_found_answer()` case above.
     """
-    if answer.text.strip() != "NOT_FOUND":
+    if not is_not_found(answer.text):
         return answer
     return Answer(text=NOT_FOUND_TEXT, citations=[], tokens_in=answer.tokens_in, tokens_out=answer.tokens_out, latency_s=answer.latency_s)
 
@@ -78,28 +86,40 @@ def _expand_if_enabled(hits: list[Hit], expand_neighbors: bool) -> list[Hit]:
 
 def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[Answer, float, float, list[Hit]]:
     """Hybrid retrieval + generation. Shared by the hybrid route and by
-    keyword-route escalation, since escalation *is* "run the hybrid flow"."""
-    hits = _get_retriever().hybrid_search(query, TOP_K)
-    if use_rerank and hits:
-        hits = _get_retriever().rerank(query, hits, TOP_K)
-        confidence = hits[0].score
-    else:
-        confidence = hits[0].meta.get("vector_sim", 0.0) if hits else 0.0
-    centroid_sim = _get_retriever().centroid_similarity(query)
+    keyword-route escalation, since escalation *is* "run the hybrid flow".
 
-    if confidence < VECTOR_MIN_SIM or centroid_sim < CENTROID_MIN_SIM:
+    Retrieval works on small child chunks; the reranker (if enabled) sees
+    a wide RERANK_POOL_K pool of them -- wider than the TOP_K it keeps, or
+    it would only reshuffle the same few hits -- and only then are children
+    collapsed to the larger parent chunks the LLM reads.
+    """
+    retriever = _get_retriever()
+    pool = retriever.hybrid_search(query, RERANK_POOL_K)
+    if use_rerank and pool:
+        pool = retriever.rerank(query, pool, len(pool))
+        hits = retriever.to_parents(pool)[:TOP_K]
+        confidence = hits[0].score  # sigmoid-normalized rerank probability
+        min_confidence = RERANK_MIN_PROB
+    else:
+        hits = retriever.to_parents(pool)[:TOP_K]
+        confidence = hits[0].meta.get("vector_sim", 0.0) if hits else 0.0
+        min_confidence = VECTOR_MIN_SIM
+    centroid_sim = retriever.centroid_similarity(query)
+
+    if confidence < min_confidence or centroid_sim < CENTROID_MIN_SIM:
         return _not_found_answer(), confidence, centroid_sim, hits
     hits = _expand_if_enabled(hits, expand_neighbors)
     return _normalize_not_found(answer_with_context(query, hits)), confidence, centroid_sim, hits
 
 
 def _run_vector(query: str, expand_neighbors: bool) -> tuple[Answer, float, float, list[Hit]]:
-    """Plain top-TOP_K vector search then generate -- the Step 6 baseline,
-    reachable via force_route="vector" so eval can compare the router
-    against it."""
-    hits = _get_retriever().vector_search(query, TOP_K)
+    """Plain vector search then generate -- the Step 6 baseline, reachable
+    via force_route="vector" so eval can compare the router against it.
+    Searches CANDIDATES_K children, so TOP_K distinct parents are likely."""
+    retriever = _get_retriever()
+    hits = retriever.to_parents(retriever.vector_search(query, CANDIDATES_K))[:TOP_K]
     confidence = hits[0].score if hits else 0.0
-    centroid_sim = _get_retriever().centroid_similarity(query)
+    centroid_sim = retriever.centroid_similarity(query)
 
     if confidence < VECTOR_MIN_SIM or centroid_sim < CENTROID_MIN_SIM:
         return _not_found_answer(), confidence, centroid_sim, hits
@@ -168,7 +188,8 @@ def ask(
         answer = answer_direct(query)
 
     elif chosen_route == "keyword":
-        hits = _get_retriever().bm25_search(query, TOP_K)
+        retriever = _get_retriever()
+        hits = retriever.to_parents(retriever.bm25_search(query, CANDIDATES_K))[:TOP_K]
         confidence = hits[0].score if hits else 0.0
         if force_route is None and confidence < BM25_MIN_SCORE:
             escalated = True

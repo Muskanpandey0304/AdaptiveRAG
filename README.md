@@ -41,6 +41,12 @@ flowchart TD
     HA --> L
 ```
 
+Retrieval runs over small *child* chunks (~120 tokens) and each hit is
+swapped for its larger *parent* chunk (~600 tokens) before generation
+(`Retriever.to_parents`), so matching is precise but the LLM gets full
+context. With reranking on, the cross-encoder scores a 30-candidate pool,
+not just the final 5.
+
 `answer_with_context` also normalizes an LLM reply of exactly `NOT_FOUND`
 to the same "Not found in the documents." message, so a confidence miss
 and a model-side miss look identical to the caller.
@@ -73,11 +79,11 @@ ollama pull llama3.1
 ## Running each step
 
 ```bash
-# 1. Add PDFs to data/raw/, then chunk them
-python -m src.ingest            # writes data/index/chunks.json
+# 1. Add PDFs to data/raw/, then chunk them (parent + child chunks)
+python -m src.ingest            # writes data/index/parents.json, data/index/chunks.json (children)
 
-# 2. Build the FAISS vector index and BM25 index
-python -m src.indexer           # writes data/index/faiss.index, data/index/bm25.pkl
+# 2. Build the FAISS vector index and BM25 index over the child chunks
+python -m src.indexer           # writes data/index/faiss.index, bm25.pkl, centroid.npy
 
 # 3. Run the test suite
 pytest -v
@@ -92,18 +98,19 @@ streamlit run app.py
 
 ## Retrieval methods, side by side
 
-Top-3 of each method for 5 real questions (from `eval/questions.json`),
-against the real 26-paper corpus:
+Qualitative top-3 comparison of each method on real questions from
+`eval/questions.json`, captured on the **original 400-token index**. Chunk ids
+changed when the corpus was re-chunked, so none are quoted; the measured
+comparison on the current index is the hit@5 / MRR table further down.
 
 **"How many problems are in the GSM8K dataset...?"** — all three methods
-converge on the same 2-3 chunks (ids 544-546, the dataset description in
+converge on the same few chunks (the dataset description in
 `2110.14168v2.pdf`). Strong agreement when a fact is stated plainly once.
 
 **"What was the best model's truthfulness on TruthfulQA...?"** — vector
-and hybrid agree closely (chunks 496, 475, 489/494, all from
-`2109.07958v2.pdf`), but BM25 alone drifts to different pages entirely
-(479, 521, 492) — still the same paper, but further from the actual
-answer. This is exactly the case fusion is for: BM25's lexical match
+and hybrid agree closely (all from `2109.07958v2.pdf`), but BM25 alone
+drifts to different pages entirely — still the same paper, but further from
+the actual answer. This is exactly the case fusion is for: BM25's lexical match
 and vector's semantic match don't always agree, and RRF fusing both
 landed closer to the vector result here.
 
@@ -137,7 +144,7 @@ points on answer relevance."* The literal string `[n]` instead of a
 real citation number — the model copied the prompt's template
 placeholder verbatim rather than filling it in. (The 59.9 vs. the
 `expected_answer`'s 59.3 is the same paper-internal inconsistency
-documented in Evaluation below, not a new error.)
+noted in the historical evaluation section below, not a new error.)
 
 **"Why does TruthfulQA find that larger models can be less
 truthful?"** → *"[n3] According to the text, larger models generally
@@ -147,211 +154,195 @@ model 60x smaller."* Specific, correct, well-grounded content — with
 
 All 3 answers are factually solid; 2 of 3 have a broken citation
 format. This is the same small-model instruction-following gap the
-full evaluation's correctness grading surfaced at scale (see below) —
-visible here in just 3 examples, from the simplest baseline, before
-the router or confidence gating ever enter the picture.
+full evaluation's correctness grading surfaced at scale — visible here in
+just 3 examples, from the simplest baseline, before the router or
+confidence gating ever enter the picture. (The literal `[n]` still shows up
+in about 15% of current answers; see Limitations.)
 
-## Evaluation
+## Parent-child chunking and the rerank fix
 
-Real run: 26 arXiv papers (NLP/LLM evaluation research, 2161 chunks),
-55 user-written questions (6 general, 32 exact, 17 conceptual), local
-`llama3.2:3b` via Ollama. Full numbers in [eval/results.md](eval/results.md).
+Two post-evaluation changes (rationale in `DECISIONS.md`), measured
+**retrieval-only** (no LLM) on the 49 in-scope questions of the 55-question
+set (the 6 `general` ones have no gold page). Before → after:
 
-**hit@5** (retrieved chunk matches the gold source/page; `general`
-questions have no gold page and are excluded):
+| Config | hit@5 | MRR |
+|---|---|---|
+| bm25 | 0.78 → 0.84 | 0.57 → 0.57 |
+| vector | 0.63 → 0.76 | 0.44 → 0.52 |
+| hybrid | 0.76 → 0.80 | 0.50 → 0.59 |
+| hybrid+rerank | 0.76 → **0.90** | 0.63 → **0.68** |
+
+`exact` questions on hybrid+rerank went 0.69 → 0.88.
+
+- **Parent-child chunking.** Children (~120 tokens) are indexed; their
+  parent (~600 tokens, never crossing a page) is what the LLM reads.
+  Chosen over heading-based chunking because `pypdf` output from two-column
+  papers has no reliable headings to split on.
+- **Rerank bug.** The cross-encoder used to rerank only the 5 hits hybrid
+  search had already picked, so it could never promote a better candidate,
+  which is why `hybrid+rerank` matched `hybrid` exactly (0.76) in the first
+  evaluation. It now reranks a 30-candidate pool.
+- **Neighbor expansion is off by default.** Parents already supply the
+  context it existed for; on top of them it adds at most +0.02 hit@5 while
+  sending ~12 parents (~7k tokens) instead of 5 to a 3B model.
+- **Thresholds re-calibrated** on the new index (`BM25_MIN_SCORE` 15,
+  `VECTOR_MIN_SIM` 0.60, `RERANK_MIN_PROB` 0.5; `CENTROID_MIN_SIM` 0.55 still
+  separates the groups). In-sample on the same 55 questions: sensible
+  defaults, not held-out-tuned values.
+
+### Full eval on the new index, plus a held-out set
+
+The LLM-based eval was re-run end to end on the new index (llama3.2:3b via
+Ollama). Because the 55 questions are also what the thresholds were tuned on,
+I wrote a **held-out set** (`eval/heldout_questions.json`: 39 questions —
+17 exact, 10 conceptual, 12 off-topic, two of them LLM-adjacent like "best LLM
+today"). Every in-scope question's gold page is computed by regex-matching
+evidence text in the PDF, not typed by hand. `python -m src.eval --questions
+eval/heldout_questions.json` runs it and skips threshold tuning, so it stays
+held out. I wrote these questions myself, so they may be friendlier than ones
+written by a third party.
+
+Correctness was graded by me (an AI session), not a human: exact questions by
+whether the answer states the key fact, conceptual ones by reading against
+`expected_answer`, off-topic ones by refusal (a normal reply on the `direct`
+route counts as correct). A raw context dump that merely contains the number
+counts as wrong. The graded per-answer files (`eval/to_grade_*graded.csv`) are
+generated locally and git-ignored like the other `to_grade*.csv` files, so a
+clone won't have them; re-run `python -m src.eval` to regenerate the answers.
+
+**Original 55 questions, new index** (in-sample for thresholds):
+
+| Config | hit@5 | correct, new (old chunking) |
+|---|---|---|
+| direct | 0.00 | 6/55 (5/55) |
+| bm25 | 0.84 | 38/55 = 69% (53%) |
+| vector | 0.76 | 41/55 = 75% (44%) |
+| hybrid | 0.80 | 38/55 = 69% (44%) |
+| hybrid+rerank | 0.90 | 43/55 = 78% (42%) |
+| router (rerank on) | 0.88 | 43/55 = 78% |
+
+The old column came from a different grading session with stricter rules for
+formatting, so the size of the jump is not a clean like-for-like number.
+
+**Held-out set** (the honest estimate): hit@5 and correct answers, in-scope
+(27) / off-topic handled correctly (12):
+
+| Config | hit@5 | in-scope correct | off-topic ok |
+|---|---|---|---|
+| direct | 0.00 | 0/27 | 12/12 |
+| bm25 | 0.74 | 12 (44%) | 9 |
+| vector | 0.67 | 14 (52%) | 9 |
+| hybrid | 0.78 | 15 (56%) | 8 |
+| hybrid+rerank | **0.93** | 16 (59%) | **12** |
+| router (rerank on, fixed) | 0.93 | 16 (59%) | 11 |
+
+hybrid+rerank is best on both sets and was the only config to refuse every
+off-topic question in the first held-out run. Retrieval (hit@5 0.93) is far
+ahead of answering (59%): the 3B model still returns bare citations, pastes
+context, or answers from the wrong paper (e.g. MMLU-Pro when asked about MMLU).
+
+**Run-to-run noise is large.** The same hybrid+rerank config scored 16/27 in
+the first held-out run and 20/27 in the prompt A/B below, after I only added a
+token cap and temperature 0. At 27 questions a gap of 3-4 answers is not a
+real difference; the retrieval ranking is more trustworthy than the
+correctness ranking.
+
+**Bugs the eval found (all fixed, see `DECISIONS.md`):** one router answer ran
+to ~209,000 characters (no output cap; fixed with `LLM_MAX_TOKENS=512` and
+`LLM_TEMPERATURE=0`, which took router mean latency from 63 s to 21 s); the app
+and eval `router` config ran without the reranker that stops off-topic
+questions (reranking is now the default in both); and a reply of
+`[1] [2] [3] NOT_FOUND` was not recognised as a refusal.
+
+**Answer-prompt A/B** (hybrid+rerank, held-out set, same code and settings):
+
+| Variant | in-scope (27) | bare-citation answers | off-topic ok (12) | total (39) |
+|---|---|---|---|---|
+| v1 original prompt | 20 | 2 | 11 | 31 (79%) |
+| v2 reworded prompt + retry | 22 | 0 | 10 | 32 (82%) |
+| **v1r original prompt + retry (default)** | 22 | 0 | 11 | **33 (85%)** |
+
+v2's reworded prompt made the model answer two off-topic questions from the
+corpus or its own knowledge, so I kept the original wording and only added a
+single retry when a reply contains no words (a citation-only reply is never a
+correct answer, so retrying it cannot cost accuracy). Differences between the
+variants are within the noise above; `v1r` was chosen because it is the safest
+by construction, not because the margin is proven.
+
+## Original evaluation and what it taught (400-token chunking, historical)
+
+This is the first full evaluation, run on the original flat 400-token chunks
+(26 arXiv papers, 2,161 chunks, the same 55 questions, `llama3.2:3b`). It is
+kept because the failures it exposed drove the later changes; for current
+numbers use the sections above.
+
+**hit@5 then** (the reranker only reordered 5 hits, which is why it matched
+`hybrid`):
 
 | Config | overall | conceptual | exact |
 |---|---|---|---|
-| direct | 0.00 | 0.00 | 0.00 |
 | bm25 | 0.78 | 0.88 | 0.72 |
 | vector | 0.63 | 0.76 | 0.56 |
 | hybrid | 0.76 | 0.88 | 0.69 |
 | hybrid+rerank | 0.76 | 0.88 | 0.69 |
 | router | 0.76 | 0.88 | 0.69 |
 
-`direct`'s 0.00 is expected (it never retrieves). BM25 edges out hybrid
-specifically on `exact` questions (0.72 vs. 0.69) — fact/number lookups
-favor literal keyword matching over semantic similarity, which is the
-whole reason the router has a keyword route at all.
+**Correctness then** (hand-graded by a separate session, 330 answers): bm25
+53%, router 49%, vector 44%, hybrid 44%, hybrid+rerank 42%, direct 9%. The
+gaps between configs were within noise; what mattered was that correctness sat
+far below hit@5 because the model answered with a bare `[2]`, pasted a raw
+table, or answered half of a two-part question while the right chunk was in
+context. One grading note: for ARES the paper itself states both 59.3
+(abstract) and 59.9 (results) for the same figure, so grading against a single
+`expected_answer` string can't catch a source's own inconsistency.
 
-**Neighbor expansion** (added after the initial build to fix chunk-
-boundary fragmentation; see `DECISIONS.md`) was measured the same way,
-`hybrid` with and without it, over all 55 questions:
+**Neighbor expansion** (pull in each hit's adjacent chunks) raised hybrid hit@5
+0.76 → 0.80 on the old chunks, all of it on `exact` questions. With
+parent-child chunking it is redundant and costs ~12 parents per query instead
+of 5, so it is off by default (see `DECISIONS.md`).
 
-| Config | hit@5 overall | conceptual | exact | latency mean |
-|---|---|---|---|---|
-| hybrid | 0.76 | 0.88 | 0.69 | 14.3s |
-| hybrid+neighbors | **0.80** | 0.88 | **0.75** | 16.2s |
+### The off-topic problem and the corpus centroid gate
 
-The gain is concentrated entirely in `exact` questions (+0.06); `conceptual`
-is unchanged. That matches the mechanism: a specific number or fact is
-more likely to sit right at a chunk boundary than a broad conceptual
-point is to need one. Cost is a modest latency/token increase from
-sending each hit's neighboring chunks as extra context. Raw answers are
-in `eval/to_grade_neighbors.csv` (not yet hand-graded for correctness —
-hit@5 only confirms the right page was retrieved, not that the final
-answer used it well, per the correctness section below).
+The first threshold sweep showed `VECTOR_MIN_SIM=0.45` gave a **100%
+false-answer rate on off-topic questions** when hybrid ran in isolation, and
+the answers showed why it wasn't just a threshold problem:
 
-**Corpus centroid gate** (added after finding the off-topic-question
-problem below; see `DECISIONS.md`) tackles it directly: a query's
-embedding is compared against the *whole corpus's* average embedding
-(`Retriever.centroid_similarity`), not just the single best-matching
-chunk. The router already sends true greetings to `direct`, but
-well-formed off-topic questions ("What is the capital of France?")
-look syntactically identical to a real question — no regex can tell
-them apart. The centroid catches what per-chunk confidence alone
-can't: a chunk can score high for an unrelated query (because the
-corpus happens to contain a near-identical benchmark example), even
-when the corpus *as a whole* clearly isn't about that topic.
+- "What is the capital of France?" got `"Paris"` from `bm25`, only because one
+  paper contains that exact benchmark example. BM25 matched on text overlap,
+  not topic.
+- A corpus of papers *about* evaluating LLMs is full of example Q&A and
+  jailbreak-shaped text that lexically resembles almost any casual query, and a
+  3B model often completes or echoes retrieved example text instead of
+  refusing (one `bm25` answer devolved into an all-caps rant lifted from a
+  jailbreak test string).
+- `hybrid` sometimes ignored "answer only from context" and used its own
+  knowledge (an actual ocean poem, real Mumbai weather).
 
-Measured against the real 55-question set: general questions scored
-0.44-0.59 on centroid similarity, scoped questions scored 0.59-0.78 —
-a clean gap, so `CENTROID_MIN_SIM=0.55` was set from the data, not
-guessed (see `src/config.py`). Re-testing the exact failure cases
-found earlier:
+The router's regex can't tell a well-formed off-topic question from a real
+one, so the fix needed a different signal: compare the query with the whole
+corpus's average embedding (`Retriever.centroid_similarity`) instead of any
+single chunk. On the 55 questions, off-topic ones scored 0.44-0.59 and
+in-scope ones 0.59-0.78; `CENTROID_MIN_SIM=0.55` was set from that gap (and
+re-checked after the index was rebuilt). Before/after:
 
 | Question | Before | After |
 |---|---|---|
-| "What is the capital of France?" | `bm25` answered "Paris" | **"Not found" on all 3 methods** |
-| "Can you write me a poem about the ocean?" | `hybrid` wrote an actual poem | **"Not found" on all 3 methods** |
-| "What's the weather like in Mumbai?" | `hybrid` described real Mumbai climate | **"Not found" on all 3 methods** |
-| "Who won the FIFA World Cup in 2022?" | garbled unrelated content | **"Not found" on all 3 methods** |
+| "What is the capital of France?" | `bm25` answered "Paris" | Not found |
+| "Can you write me a poem about the ocean?" | `hybrid` wrote a poem | Not found |
+| "What's the weather like in Mumbai?" | `hybrid` described real climate | Not found |
+| "Who won the FIFA World Cup in 2022?" | garbled unrelated content | Not found |
 
-4 of the 6 general questions are now fully fixed across `keyword`,
-`vector`, and `hybrid` alike — the false-answer rate on general
-questions drops from **100% to ~17%** (only "Thanks, that was
-helpful!" still slips through when a route is forced in isolation for
-testing; in real operation the router's greeting regex already sends
-it to `direct` before this gate is ever reached). No regression on
-real questions: a sanity check across 6 scoped questions all scored
-0.65-0.69, comfortably above the threshold, and still got substantive
-answers.
+On the held-out set (above) the final pipeline handles 11-12 of 12 off-topic
+questions; the misses are model-side (it answers a code question from its own
+knowledge, or returns a bare citation), not retrieval. The reranker is what
+makes the biggest difference there: the same retrieval without it refused
+8 of 12.
 
-**Correctness** (hand-graded against `expected_answer`, all 330
-answers — 55 questions × 6 configs — via `eval/to_grade.csv`; measured
-*before* the centroid gate above existed, so the 6 general questions'
-scores here predate that fix and would likely improve on a re-run):
-
-| Config | Correct | Score |
-|---|---|---|
-| bm25 | 29/55 | 53% |
-| router | 27/55 | 49% |
-| vector | 24/55 | 44% |
-| hybrid | 24/55 | 44% |
-| hybrid+rerank | 23/55 | 42% |
-| direct | 5/55 | 9% |
-
-**Correctness is well below hit@5 (42-53% vs. 63-78%).** Finding the
-right chunk isn't enough: the grader marked an answer wrong whenever it
-was a bare citation marker (`[2]`), a raw table dump instead of a
-sentence, or only half of a two-part answer — all of which happened
-with the right chunk sitting right there in context. The gaps between
-search strategies (1-6 questions out of 55) are within noise at this
-sample size; none is clearly better than the others on correctness,
-even though hit@5 ranked them more distinctly.
-
-One grading methodology note, found by cross-checking the flagged
-"wrong numbers" against the actual PDFs: two were genuine model errors
-(HaluEval: model said "30,000 samples per task," the paper says 10,000
-per task/30,000 total; HELM: model said "14" or "42" core scenarios,
-the paper says 16, unambiguously, a dozen times over). But a third
-(ARES: model said "59.9" percentage points, graded wrong against an
-expected answer of "59.3") turned out **not** to be a clean error —
-the source paper itself states both 59.3 (abstract) and 59.9 (results
-section) for the same figure. Grading against a single `expected_answer`
-string can't catch a source paper's own internal inconsistency; this
-affects at most 1 of 55 questions, not enough to change the ranking
-above, but worth knowing before trusting any single-question grade too
-literally.
-
-## What worked / what didn't
-
-**Worked:** The router correctly never escalated a genuinely strong
-keyword match (escalation rate 0.00% in this run), and `direct` costs
-almost nothing (mean latency 4.9s vs. 12-55s for anything touching
-retrieval) while correctly never fabricating an answer to a real
-document question (0.00 hit@5 is right, not a bug, for a route that
-has no context to retrieve from).
-
-**Didn't work, and why — the confidence gate let bad answers through
-more often than it should have.** The threshold sweep
-(`tune_thresholds()`, in `eval/results.md`) shows the current
-`VECTOR_MIN_SIM=0.45` gives a **100% false-answer rate on genuinely
-out-of-scope questions** when hybrid retrieval runs in isolation (via
-`force_route`) — every one of the 6 `general` test questions cleared
-the threshold and got an attempted answer instead of "Not found."
-Looking at the *actual* answers in `to_grade.csv` explains why, and
-it's more interesting than "the threshold is wrong":
-
-- Asked **"What is the capital of France?"**, the `bm25` config
-  answered `"Paris"` — correctly, but only because one of the papers
-  contains a benchmark Q&A example (`"What is the capital of
-  France?" → "Paris"`) almost verbatim. BM25 matched it on literal
-  text overlap, not because the corpus is actually about France.
-- Asked conversational questions ("Hi, how are you today?", "Can you
-  write me a poem about the ocean?", "What's the weather in Mumbai?"),
-  several configs retrieved chunks from papers *about* prompts,
-  jailbreaks, and LLM-evaluation benchmarks — and then the model
-  **completed or echoed the example prompt text it found**, rather
-  than recognizing it as unrelated sample data and refusing. One `bm25`
-  answer devolves into an unrelated all-caps "PRESIDENT OF THE UNITED
-  STATES" rant about the C programming language — almost certainly a
-  jailbreak-test string lifted straight from a retrieved chunk.
-- `hybrid` sometimes just ignored the "answer only from context"
-  instruction entirely and used its own general knowledge (writing an
-  actual ocean poem, describing Mumbai's real climate) — a real
-  instruction-following gap in a 3B local model, not a retrieval bug.
-- `vector` alone was the most reliable refuser of the three forced
-  single-method configs (correctly said "Not found" or gave a
-  reasonable refusal on 5 of 6 general questions) — lexical/BM25
-  matching was specifically what let irrelevant benchmark content leak
-  through, since a corpus of *papers about evaluating LLMs* is, ironically,
-  full of generic example questions that lexically resemble almost any
-  casual query.
-
-**Takeaway for an interview:** raising `VECTOR_MIN_SIM` alone won't
-fully fix this — the deeper issue is that BM25 can retrieve
-superficially relevant content from a domain-adjacent corpus (papers
-*about* QA benchmarks and jailbreaks naturally contain QA- and
-jailbreak-shaped text), and a 3B local model doesn't reliably resist
-completing what it retrieves. A production fix would need either a
-stricter "is this chunk's content actually relevant, or just
-textually similar" check, or a larger/better-instructed model.
-
-**Update: this is now fixed** — the exact "stricter relevance check"
-called for above was added as the corpus centroid gate (see
-Evaluation, above), which compares a query against the *whole
-corpus's* topic instead of any single chunk. The 4 failure cases
-quoted below ("capital of France," the ocean poem, Mumbai weather,
-FIFA World Cup) are now all correctly refused across every retrieval
-method, with real before/after evidence. The analysis below is kept
-as-is since it's what led to the fix.
-
-**The correctness grading confirms this quantitatively, not just
-anecdotally.** On the 6 general (out-of-scope) questions specifically,
-`direct` (no retrieval at all) got 5/6 correct, while `hybrid+rerank`
-got 0/6 and the other retrieval-on configs got 1-3/6. Turning retrieval
-on for a question that shouldn't need it made things *worse*, not
-better — the same effect the threshold sweep found, now measured
-against actual correctness rather than just a confidence number.
-
-**A second, separate failure mode the correctness grading surfaced:**
-even on real document questions where the right chunk *was* retrieved,
-the model often answered with a bare citation marker, a raw table
-pasted from the context, or only one half of a two-part question —
-all marked wrong despite correct retrieval. This is exactly the kind
-of failure neighbor expansion (added after the initial build; see
-`DECISIONS.md`) targets for the "half of a two-part answer" case
-specifically, by giving the model the adjacent chunk instead of a
-hard page/chunk boundary cut.
-
-**Latency numbers in `eval/results.md` should be read as rough orders
-of magnitude, not a clean strategy comparison** — this run shared a
-resource-constrained machine with other running applications, and
-later configs (e.g. `router`, mean 54.8s) measurably slowed down under
-memory pressure partway through the run, independent of the strategy
-itself. The hit@5 numbers aren't affected by this (they don't depend
-on wall-clock speed), only the latency/p95 columns are.
+**What worked:** the router never needed to escalate a strong keyword match,
+and `direct` costs almost nothing (mean ~4-5 s vs ~17-25 s for anything that
+retrieves). **Latency note:** the old run's latency numbers were distorted by
+memory pressure from other applications; in the later runs on an otherwise idle
+machine, retrieval configs averaged ~17-25 s per question and the router ~21 s.
 
 ## Limitations
 
@@ -364,13 +355,13 @@ on wall-clock speed), only the latency/p95 columns are.
   step (see `DECISIONS.md`).
 - Token counts are approximate (`word count × 1.3`), not an exact match
   for any specific model's tokenizer.
-- `BM25_MIN_SCORE=5.0` and `VECTOR_MIN_SIM=0.45` are still the spec's
-  placeholder values — `tune_thresholds()` has now run against real
-  data (see Evaluation above) and shows neither threshold alone fixes
-  false answers on out-of-scope questions; the root cause is retrieval
-  returning superficially-matching but irrelevant content, not just a
-  miscalibrated number. Raising `VECTOR_MIN_SIM` was not applied
-  automatically, per this project's rule that the user decides.
+- Confidence thresholds (`BM25_MIN_SCORE`, `VECTOR_MIN_SIM`,
+  `RERANK_MIN_PROB`, `CENTROID_MIN_SIM`) were re-calibrated on the
+  parent-child index using the same 55 questions the evaluation reports
+  on — no held-out split, so answer-rate and false-answer figures are
+  optimistic. Per-chunk thresholds alone can't separate off-topic
+  questions (their scores overlap in-scope ones); the centroid gate and
+  the reranker carry that.
 - A corpus of papers *about* LLM evaluation/benchmarks/jailbreaks
   contains example Q&A pairs and adversarial prompt text as part of its
   normal content — retrieval can surface this for an unrelated query,
@@ -382,8 +373,18 @@ on wall-clock speed), only the latency/p95 columns are.
   conceptual question can trigger the `camel_case_token` keyword rule.
   This is tolerated by design: the keyword route escalates to hybrid
   automatically on a weak BM25 match.
+- The prompt tells the model to cite with "[n]", and it sometimes copies that
+  literally (7 of 46 non-refusal router answers on the 55-question set),
+  so those answers carry no parseable citation. The reworded v2 prompt avoided
+  this but loosened refusals (see the A/B); a minimal fix like "e.g. [2]" in the
+  v1 wording has not been measured.
+- Generation quality, not retrieval, is the main ceiling: hit@5 is ~0.93 on the
+  held-out set but only ~59% of in-scope answers are correct with the 3B model.
+  There are no confidence intervals, the held-out set is small (39) and was
+  written and graded by the assistant, and the same config varied by 4 answers
+  between two runs.
 - Reranking lazily loads `BAAI/bge-reranker-base` (~1GB); the first call
-  that uses it is slow.
+  that uses it is slow, and it now scores 30 candidates per query.
 - Only one LLM provider is implemented (`ollama`); switching providers
   means implementing a new branch in `src/llm.py`, not just an env var.
 - No authentication, concurrency control, or deployment hardening — this
@@ -422,9 +423,10 @@ hybrid/vector path returns "Not found in the documents" — without calling
 the LLM at all — when retrieval confidence falls below a threshold, rather
 than letting the LLM attempt an answer from weak context. These are
 modest, specific additions on top of the same core idea (strategy
-routing) these other projects already explore; see `eval/results.md`
-(once generated from real data) for how the router actually compares to
-each strategy run in isolation on this project's own test questions.
+routing) these other projects already explore; see the held-out table above
+for how the router actually compares to each strategy run in isolation. On
+this corpus it ties hybrid+rerank on accuracy (16/27 held-out, 43/55 on the
+original set) and mainly saves latency on `direct` and keyword queries.
 
 ---
 

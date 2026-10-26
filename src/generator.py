@@ -3,10 +3,25 @@
 import re
 from dataclasses import dataclass
 
+from src.config import PROMPT_VERSION
 from src.llm import generate
 from src.retrievers import Hit
 
 _CITATION_RE = re.compile(r"\[(\d+)\]")
+# What's left of a reply once citation markers, digits and spacing are
+# stripped -- a small model sometimes emits "[1] [2] [3] NOT_FOUND".
+_NOT_FOUND_NOISE_RE = re.compile(r"[\[\]\d\s.,]")
+
+
+def has_answer_text(text: str) -> bool:
+    """True if `text` contains real words, not just citation markers like "[1] [2]"."""
+    return len(re.sub(r"[^A-Za-z]", "", text)) >= 3
+
+
+def is_not_found(text: str) -> bool:
+    """True if `text` is the NOT_FOUND sentinel, even with stray citation
+    markers or punctuation around it."""
+    return _NOT_FOUND_NOISE_RE.sub("", text) == "NOT_FOUND"
 
 _CONTEXT_SYSTEM_PROMPT = (
     "Answer the question using ONLY the numbered context blocks below. "
@@ -24,6 +39,20 @@ class Answer:
     tokens_in: int
     tokens_out: int
     latency_s: float
+
+_CONTEXT_SYSTEM_PROMPT_V2 = (
+    "Answer the question using ONLY the numbered context blocks below. "
+    "Write your answer as one or more complete sentences that state the specific "
+    "facts asked for (numbers, names, reasons) in your own words. "
+    "After each claim, add the number of the supporting context block in square "
+    "brackets, like [2]. Never reply with only a citation or only copied text. "
+    "If the context does not contain the answer, reply with exactly: NOT_FOUND"
+)
+
+_RETRY_SUFFIX = (
+    "\n\nYour previous reply contained no answer text. Answer the question now in "
+    "complete sentences, citing blocks like [2]."
+)
 
 
 def _build_context_prompt(query: str, hits: list[Hit]) -> str:
@@ -56,9 +85,24 @@ def _parse_citations(text: str, hits: list[Hit]) -> list[dict]:
 def answer_with_context(query: str, hits: list[Hit]) -> Answer:
     """Answer `query` using only the given chunks as context, with citations."""
     prompt = _build_context_prompt(query, hits)
-    result = generate(prompt, system=_CONTEXT_SYSTEM_PROMPT)
+    system = _CONTEXT_SYSTEM_PROMPT_V2 if PROMPT_VERSION == "v2" else _CONTEXT_SYSTEM_PROMPT
+    result = generate(prompt, system=system)
 
-    citations = [] if result.text.strip() == "NOT_FOUND" else _parse_citations(result.text, hits)
+    # "v1r" = original prompt + the retry; "v2" = new prompt + the retry. A
+    # citation-only reply is never a correct answer, so retrying it can't cost
+    # accuracy, and it leaves the original prompt's refusal behavior alone.
+    if PROMPT_VERSION in ("v1r", "v2") and not has_answer_text(result.text) and not is_not_found(result.text):
+        first = result
+        result = generate(prompt + _RETRY_SUFFIX, system=system)
+        # Report the true cost of getting this answer, both calls.
+        result = type(result)(
+            text=result.text,
+            input_tokens=first.input_tokens + result.input_tokens,
+            output_tokens=first.output_tokens + result.output_tokens,
+            latency_s=first.latency_s + result.latency_s,
+        )
+
+    citations = [] if is_not_found(result.text) else _parse_citations(result.text, hits)
     return Answer(
         text=result.text,
         citations=citations,
