@@ -111,9 +111,42 @@ questions have no gold page and are excluded):
 `direct`'s 0.00 is expected (it never retrieves). BM25 edges out hybrid
 specifically on `exact` questions (0.72 vs. 0.69) — fact/number lookups
 favor literal keyword matching over semantic similarity, which is the
-whole reason the router has a keyword route at all. Correctness itself
-is hand-graded in `eval/to_grade.csv` (0/1 column, left for the user to
-fill in) rather than invented here.
+whole reason the router has a keyword route at all.
+
+**Correctness** (hand-graded against `expected_answer`, all 330
+answers — 55 questions × 6 configs — via `eval/to_grade.csv`):
+
+| Config | Correct | Score |
+|---|---|---|
+| bm25 | 29/55 | 53% |
+| router | 27/55 | 49% |
+| vector | 24/55 | 44% |
+| hybrid | 24/55 | 44% |
+| hybrid+rerank | 23/55 | 42% |
+| direct | 5/55 | 9% |
+
+**Correctness is well below hit@5 (42-53% vs. 63-78%).** Finding the
+right chunk isn't enough: the grader marked an answer wrong whenever it
+was a bare citation marker (`[2]`), a raw table dump instead of a
+sentence, or only half of a two-part answer — all of which happened
+with the right chunk sitting right there in context. The gaps between
+search strategies (1-6 questions out of 55) are within noise at this
+sample size; none is clearly better than the others on correctness,
+even though hit@5 ranked them more distinctly.
+
+One grading methodology note, found by cross-checking the flagged
+"wrong numbers" against the actual PDFs: two were genuine model errors
+(HaluEval: model said "30,000 samples per task," the paper says 10,000
+per task/30,000 total; HELM: model said "14" or "42" core scenarios,
+the paper says 16, unambiguously, a dozen times over). But a third
+(ARES: model said "59.9" percentage points, graded wrong against an
+expected answer of "59.3") turned out **not** to be a clean error —
+the source paper itself states both 59.3 (abstract) and 59.9 (results
+section) for the same figure. Grading against a single `expected_answer`
+string can't catch a source paper's own internal inconsistency; this
+affects at most 1 of 55 questions, not enough to change the ranking
+above, but worth knowing before trusting any single-question grade too
+literally.
 
 ## What worked / what didn't
 
@@ -168,6 +201,24 @@ jailbreak-shaped text), and a 3B local model doesn't reliably resist
 completing what it retrieves. A production fix would need either a
 stricter "is this chunk's content actually relevant, or just
 textually similar" check, or a larger/better-instructed model.
+
+**The correctness grading confirms this quantitatively, not just
+anecdotally.** On the 6 general (out-of-scope) questions specifically,
+`direct` (no retrieval at all) got 5/6 correct, while `hybrid+rerank`
+got 0/6 and the other retrieval-on configs got 1-3/6. Turning retrieval
+on for a question that shouldn't need it made things *worse*, not
+better — the same effect the threshold sweep found, now measured
+against actual correctness rather than just a confidence number.
+
+**A second, separate failure mode the correctness grading surfaced:**
+even on real document questions where the right chunk *was* retrieved,
+the model often answered with a bare citation marker, a raw table
+pasted from the context, or only one half of a two-part question —
+all marked wrong despite correct retrieval. This is exactly the kind
+of failure neighbor expansion (added after the initial build; see
+`DECISIONS.md`) targets for the "half of a two-part answer" case
+specifically, by giving the model the adjacent chunk instead of a
+hard page/chunk boundary cut.
 
 **Latency numbers in `eval/results.md` should be read as rough orders
 of magnitude, not a clean strategy comparison** — this run shared a
