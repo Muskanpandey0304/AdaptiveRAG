@@ -113,6 +113,24 @@ specifically on `exact` questions (0.72 vs. 0.69) — fact/number lookups
 favor literal keyword matching over semantic similarity, which is the
 whole reason the router has a keyword route at all.
 
+**Neighbor expansion** (added after the initial build to fix chunk-
+boundary fragmentation; see `DECISIONS.md`) was measured the same way,
+`hybrid` with and without it, over all 55 questions:
+
+| Config | hit@5 overall | conceptual | exact | latency mean |
+|---|---|---|---|---|
+| hybrid | 0.76 | 0.88 | 0.69 | 14.3s |
+| hybrid+neighbors | **0.80** | 0.88 | **0.75** | 16.2s |
+
+The gain is concentrated entirely in `exact` questions (+0.06); `conceptual`
+is unchanged. That matches the mechanism: a specific number or fact is
+more likely to sit right at a chunk boundary than a broad conceptual
+point is to need one. Cost is a modest latency/token increase from
+sending each hit's neighboring chunks as extra context. Raw answers are
+in `eval/to_grade_neighbors.csv` (not yet hand-graded for correctness —
+hit@5 only confirms the right page was retrieved, not that the final
+answer used it well, per the correctness section below).
+
 **Correctness** (hand-graded against `expected_answer`, all 330
 answers — 55 questions × 6 configs — via `eval/to_grade.csv`):
 
