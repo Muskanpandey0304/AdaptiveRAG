@@ -201,3 +201,24 @@ def test_rerank_scores_are_probabilities(retriever) -> None:
     candidates = retriever.hybrid_search("FastAPI dependency injection", k=5)
     reranked = retriever.rerank("FastAPI dependency injection", candidates, k=5)
     assert all(0.0 <= h.score <= 1.0 for h in reranked)
+
+
+def test_select_sentences_keeps_the_relevant_sentence_and_its_neighbors(tmp_path) -> None:
+    text = (
+        "The weather was mild that year. Farmers planted early crops. "
+        "The ASGI server Uvicorn is used to run FastAPI applications. "
+        "Bread prices rose slowly. Tea was popular in the north."
+    )
+    chunks = [{"id": 0, "text": text, "source": "a.pdf", "page": 3}]
+    r = _build_retriever(tmp_path, chunks)
+    hit = Hit(chunk_id=0, score=0.9, chunk=chunks[0], meta={"vector_sim": 0.8})
+
+    out = r.select_sentences("What ASGI server runs FastAPI?", [hit], top_n=1, window=1)
+
+    assert len(out) == 1
+    assert "Uvicorn" in out[0].chunk["text"]
+    assert "Tea was popular" not in out[0].chunk["text"]  # outside the window
+    assert len(out[0].chunk["text"]) < len(text)
+    assert (out[0].chunk["source"], out[0].chunk["page"], out[0].chunk_id) == ("a.pdf", 3, 0)
+    assert out[0].meta["compressed"] is True and out[0].meta["vector_sim"] == 0.8
+    assert hit.chunk["text"] == text  # the input hit is not modified

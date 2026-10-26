@@ -38,6 +38,25 @@ LLM_MAX_TOKENS = 512
 # eval can compare versions on identical code.
 PROMPT_VERSION: str = os.getenv("PROMPT_VERSION", "v1r")
 
+# "v3" = structured JSON output ({found, answer, sources}); it removes
+# bare/literal-"[n]" citations and makes a refusal an explicit found=false.
+# Whether it (and the options below) becomes the default is decided by the
+# measurements recorded in DECISIONS.md.
+
+# What the generator reads. "full" sends the whole parent chunks; "sentences"
+# sends only the SENTENCE_TOP_N best-matching sentences from them (each with
+# SENTENCE_WINDOW neighbors either side); "auto" uses "sentences" for
+# single-fact lookup questions (router.is_factoid_question) and "full" for
+# everything else. Measured: "sentences" matches or beats "full" on lookups and
+# is ~4x faster, but loses ~2 of 10 conceptual answers, hence "auto".
+CONTEXT_MODE: str = os.getenv("CONTEXT_MODE", "auto")
+SENTENCE_TOP_N = 6
+SENTENCE_WINDOW = 1
+
+# After generating, check every number in the answer appears in the retrieved
+# parents; if not, retry once. Free (no extra model), catches wrong numbers.
+GROUNDING_CHECK: bool = os.getenv("GROUNDING_CHECK", "0") == "1"
+
 # Deterministic decoding, so eval numbers don't move between runs and a
 # repeated question gets a repeated answer.
 LLM_TEMPERATURE = 0.0

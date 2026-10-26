@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from src import config
 from src.config import (
     BM25_MIN_SCORE,
     CANDIDATES_K,
@@ -21,7 +22,7 @@ from src.config import (
 )
 from src.generator import Answer, answer_direct, answer_with_context, is_not_found
 from src.retrievers import Hit, Retriever
-from src.router import route
+from src.router import is_factoid_question, route
 
 LOG_PATH = Path("logs/queries.jsonl")
 NOT_FOUND_TEXT = "Not found in the documents."
@@ -84,6 +85,19 @@ def _expand_if_enabled(hits: list[Hit], expand_neighbors: bool) -> list[Hit]:
     return _get_retriever().expand_neighbors(hits, window=1)
 
 
+def _generate_answer(query: str, hits: list[Hit]) -> Answer:
+    """Generate from `hits`, shrinking them to their best sentences first when
+    CONTEXT_MODE is "sentences". The full parents stay available to the
+    generator's number check, and `result.hits` still reports the full parents."""
+    llm_hits = hits
+    use_sentences = config.CONTEXT_MODE == "sentences" or (
+        config.CONTEXT_MODE == "auto" and is_factoid_question(query)
+    )
+    if use_sentences and hits:
+        llm_hits = _get_retriever().select_sentences(query, hits)
+    return _normalize_not_found(answer_with_context(query, llm_hits, full_hits=hits))
+
+
 def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[Answer, float, float, list[Hit]]:
     """Hybrid retrieval + generation. Shared by the hybrid route and by
     keyword-route escalation, since escalation *is* "run the hybrid flow".
@@ -109,7 +123,7 @@ def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[A
     if confidence < min_confidence or centroid_sim < CENTROID_MIN_SIM:
         return _not_found_answer(), confidence, centroid_sim, hits
     hits = _expand_if_enabled(hits, expand_neighbors)
-    return _normalize_not_found(answer_with_context(query, hits)), confidence, centroid_sim, hits
+    return _generate_answer(query, hits), confidence, centroid_sim, hits
 
 
 def _run_vector(query: str, expand_neighbors: bool) -> tuple[Answer, float, float, list[Hit]]:
@@ -124,7 +138,7 @@ def _run_vector(query: str, expand_neighbors: bool) -> tuple[Answer, float, floa
     if confidence < VECTOR_MIN_SIM or centroid_sim < CENTROID_MIN_SIM:
         return _not_found_answer(), confidence, centroid_sim, hits
     hits = _expand_if_enabled(hits, expand_neighbors)
-    return _normalize_not_found(answer_with_context(query, hits)), confidence, centroid_sim, hits
+    return _generate_answer(query, hits), confidence, centroid_sim, hits
 
 
 def _log(result: Result, query: str) -> None:
@@ -205,7 +219,7 @@ def ask(
                 answer = _not_found_answer()
             else:
                 hits = _expand_if_enabled(hits, expand_neighbors)
-                answer = _normalize_not_found(answer_with_context(query, hits))
+                answer = _generate_answer(query, hits)
 
     elif chosen_route == "vector":
         answer, confidence, centroid_sim, hits = _run_vector(query, expand_neighbors)

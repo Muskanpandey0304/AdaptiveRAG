@@ -51,6 +51,27 @@ FILE_PATH_RE = re.compile(r"[./\\][\w./\\-]*\w|\b[\w-]+\.[a-zA-Z]{1,5}\b")
 # e.g. "--max-findings", "--no-verify".
 CLI_FLAG_RE = re.compile(r"--[a-zA-Z][\w-]*")
 
+# --- single-fact lookup detection (used to pick the generator's context size) --
+
+# "How many...", "What percentage...", "On how many...": the answer is one
+# figure or name, so a few well-matched sentences beat five whole chunks.
+FACTOID_START_RE = re.compile(
+    r"^\s*(how (many|much)|on how many|by how (many|much)|over what|at what|when (was|did)"
+    r"|what (percentage|percent|fraction|proportion|score|accuracy|correlation|spearman|pearson|number"
+    r"|is the (number|size|score|accuracy|total|name)|were the (sizes|number))"
+    r"|which (model|two|dataset|datasets))",
+    re.IGNORECASE,
+)
+
+# Wording that asks for an explanation or comparison, which needs broader
+# context than a few sentences, even if the question starts like a lookup.
+EXPLANATORY_RE = re.compile(
+    r"\b(why|explain|differ(ence|s|ent)?|compare|how (does|do|did|can|is|are)"
+    r"|what (biases|limitations|shortcomings|drawbacks|contributions)"
+    r"|limitations|contribution|conclude|motivate)\b",
+    re.IGNORECASE,
+)
+
 QUESTION_WORDS = {"what", "why", "how", "when", "who", "which", "explain"}
 
 
@@ -88,3 +109,16 @@ def route(query: str) -> tuple[str, str]:
         return "keyword", "short_query_no_question_word"
 
     return "hybrid", "default"
+
+
+def is_factoid_question(query: str) -> bool:
+    """True for a single-fact lookup ("How many problems...?"); False for
+    anything explanatory, multi-part or ambiguous.
+
+    Deliberately conservative: it errs toward False, because a False just
+    means the generator gets the full context (slower, never less accurate),
+    while a wrong True would cut context an explanation needed. On the 76
+    labelled in-scope questions it sent 40 of 49 lookup questions to the fast
+    path and 0 of 27 conceptual ones.
+    """
+    return bool(FACTOID_START_RE.search(query)) and not EXPLANATORY_RE.search(query)

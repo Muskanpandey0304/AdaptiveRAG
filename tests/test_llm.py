@@ -50,3 +50,28 @@ def test_ollama_call_caps_output_and_is_deterministic(monkeypatch) -> None:
     monkeypatch.setattr(llm_module.ollama, "chat", fake_chat)
     llm_module.generate("hi")
     assert seen["options"] == {"num_predict": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE}
+
+
+def test_ollama_call_passes_a_json_schema_only_when_given(monkeypatch) -> None:
+    import src.llm as llm_module
+
+    seen = []
+
+    class _Msg:
+        content = "{}"
+
+    class _Resp:
+        message = _Msg()
+        prompt_eval_count = 1
+        eval_count = 1
+
+    def fake_chat(model, messages, **kwargs):
+        seen.append(kwargs)
+        return _Resp()
+
+    monkeypatch.setattr(llm_module.ollama, "chat", fake_chat)
+    llm_module.generate("hi")
+    llm_module.generate("hi", schema={"type": "object"})
+
+    assert "format" not in seen[0]
+    assert seen[1]["format"] == {"type": "object"}

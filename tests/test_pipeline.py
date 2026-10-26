@@ -175,3 +175,22 @@ def test_rerank_sees_a_wider_pool_than_top_k(wide_synthetic_retriever, monkeypat
 
     assert seen_pool_sizes and seen_pool_sizes[0] > pipeline.TOP_K  # 12 chunks in the fixture
     assert len(result.hits) == pipeline.TOP_K
+
+
+def test_auto_context_mode_trims_lookups_but_not_explanations(synthetic_retriever, monkeypatch) -> None:
+    """CONTEXT_MODE="auto": a single-fact lookup is sent through sentence
+    selection; an explanatory question gets the full parents."""
+    monkeypatch.setattr("src.config.CONTEXT_MODE", "auto")
+    calls = []
+    real = synthetic_retriever.select_sentences
+    monkeypatch.setattr(synthetic_retriever, "select_sentences", lambda q, h: (calls.append(q), real(q, h))[1])
+    monkeypatch.setattr(
+        "src.generator.generate",
+        lambda p, system=None, schema=None: LLMResult(text="ok [1]", input_tokens=1, output_tokens=1, latency_s=0.0),
+    )
+    hits = synthetic_retriever.vector_search("ASGI server FastAPI", 3)
+
+    pipeline._generate_answer("How many ASGI servers does the text name?", hits)
+    pipeline._generate_answer("Why is Uvicorn used to run FastAPI?", hits)
+
+    assert calls == ["How many ASGI servers does the text name?"]

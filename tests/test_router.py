@@ -60,3 +60,31 @@ def test_route_classification(query: str, expected_route: str, expected_reason: 
         f"query={query!r} -> got ({actual_route!r}, {actual_reason!r}), "
         f"expected ({expected_route!r}, {expected_reason!r})"
     )
+
+
+def test_is_factoid_question_flags_single_fact_lookups() -> None:
+    from src.router import is_factoid_question
+
+    for q in (
+        "How many problems are in the GSM8K dataset?",
+        "What percentage of HumanEval problems does Codex-S solve with a single sample?",
+        "By how much does the largest GPT-3 model improve over random chance on MMLU?",
+        "On how many of the 80 tested queries could Vicuna-13B beat ChatGPT?",
+        "Which model does ARES use for its judges?",
+    ):
+        assert is_factoid_question(q), q
+
+
+def test_is_factoid_question_rejects_explanatory_and_other_questions() -> None:
+    from src.router import is_factoid_question
+
+    for q in (
+        "Why does TruthfulQA find that larger models can be less truthful?",
+        "How does BERTScore compute similarity between a reference and a candidate?",
+        "What limitations of static benchmarks motivate Chatbot Arena?",
+        "How many models does HELM evaluate, and how does it differ from earlier benchmarks?",
+        "Explain how Adversarial Filtering works.",
+        "What are the seven subjects in the MATH dataset?",
+        "Hi, how are you?",
+    ):
+        assert not is_factoid_question(q), q

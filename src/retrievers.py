@@ -9,8 +9,17 @@ import faiss
 import numpy as np
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
-from src.config import CANDIDATES_K, EMBED_MODEL, QUERY_PREFIX, RERANK_MODEL, RRF_K
+from src.config import (
+    CANDIDATES_K,
+    EMBED_MODEL,
+    QUERY_PREFIX,
+    RERANK_MODEL,
+    RRF_K,
+    SENTENCE_TOP_N,
+    SENTENCE_WINDOW,
+)
 from src.indexer import BM25_PATH, CENTROID_PATH, CHUNKS_PATH, FAISS_PATH, tokenize
+from src.ingest import _split_sentences
 
 
 @dataclass
@@ -247,6 +256,41 @@ class Retriever:
                         )
                     )
         return expanded
+
+    def select_sentences(
+        self, query: str, hits: list[Hit], top_n: int = SENTENCE_TOP_N, window: int = SENTENCE_WINDOW
+    ) -> list[Hit]:
+        """Shrink each hit's text to its most query-relevant sentences.
+
+        Every sentence of every hit is scored against `query` with the
+        cross-encoder; the `top_n` best overall are kept, each with `window`
+        neighboring sentences either side (a number often sits one sentence
+        from the sentence that names it). Hits keep their rank, source, page
+        and id, so citations still point at the right parent; a hit with no
+        selected sentence is dropped. Returns new Hits (the inputs are not
+        modified); falls back to `hits` unchanged if there is nothing to score.
+        """
+        per_hit = [_split_sentences(hit.chunk["text"]) or [hit.chunk["text"]] for hit in hits]
+        owners = [(hi, si) for hi, sentences in enumerate(per_hit) for si in range(len(sentences))]
+        if not owners:
+            return hits
+        scores = self.reranker.predict([(query, per_hit[hi][si]) for hi, si in owners], batch_size=32)
+
+        keep: list[set[int]] = [set() for _ in hits]
+        for idx in np.argsort(scores)[::-1][:top_n]:
+            hi, si = owners[int(idx)]
+            keep[hi].update(j for j in range(si - window, si + window + 1) if 0 <= j < len(per_hit[hi]))
+
+        return [
+            Hit(
+                chunk_id=hit.chunk_id,
+                score=hit.score,
+                chunk={**hit.chunk, "text": " ".join(per_hit[hi][j] for j in sorted(keep[hi]))},
+                meta={**hit.meta, "compressed": True},
+            )
+            for hi, hit in enumerate(hits)
+            if keep[hi]
+        ]
 
     def rerank(self, query: str, hits: list[Hit], k: int) -> list[Hit]:
         """Re-score `hits` with a cross-encoder and return the top k.

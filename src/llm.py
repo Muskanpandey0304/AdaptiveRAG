@@ -24,16 +24,19 @@ class LLMResult:
     latency_s: float
 
 
-def generate(prompt: str, system: str | None = None) -> LLMResult:
-    """Call the configured LLM once and return its answer plus call stats."""
+def generate(prompt: str, system: str | None = None, schema: dict | None = None) -> LLMResult:
+    """Call the configured LLM once and return its answer plus call stats.
+
+    `schema`, if given, is a JSON schema the reply must follow (Ollama's
+    structured output); the reply text is then a JSON string."""
     if LLM_PROVIDER != "ollama":
         raise NotImplementedError(
             f"LLM_PROVIDER={LLM_PROVIDER!r} is not implemented; only 'ollama' is."
         )
-    return _generate_ollama(prompt, system)
+    return _generate_ollama(prompt, system, schema)
 
 
-def _generate_ollama(prompt: str, system: str | None) -> LLMResult:
+def _generate_ollama(prompt: str, system: str | None, schema: dict | None = None) -> LLMResult:
     """Send `prompt` to the local Ollama server and time the round trip.
 
     Retries once: a local Ollama server occasionally drops the first request
@@ -45,13 +48,15 @@ def _generate_ollama(prompt: str, system: str | None) -> LLMResult:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
-    options = {"num_predict": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE}
+    kwargs: dict = {"options": {"num_predict": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE}}
+    if schema is not None:
+        kwargs["format"] = schema
 
     start = time.perf_counter()
     try:
-        response = ollama.chat(model=LLM_MODEL, messages=messages, options=options)
+        response = ollama.chat(model=LLM_MODEL, messages=messages, **kwargs)
     except Exception:
-        response = ollama.chat(model=LLM_MODEL, messages=messages, options=options)
+        response = ollama.chat(model=LLM_MODEL, messages=messages, **kwargs)
     latency_s = time.perf_counter() - start
 
     return LLMResult(

@@ -269,6 +269,39 @@ correct answer, so retrying it cannot cost accuracy). Differences between the
 variants are within the noise above; `v1r` was chosen because it is the safest
 by construction, not because the margin is proven.
 
+## Getting more out of the 3B model (generation experiments)
+
+Since the dominant error is the 3B generator (hit@5 ~0.93 vs ~59-80% correct),
+I tried techniques that make a small model's job easier without changing the
+model. Each is a switch in `src/config.py`; all were compared on **cached
+retrieval** (identical context for every variant, generation only), developed
+on the original 55 questions (49 in-scope) and then checked on the held-out set.
+
+| Technique | What it does | Result |
+|---|---|---|
+| **Structured output** (`PROMPT_VERSION=v3`) | Forces JSON `{found, answer, sources}` via Ollama's schema support | Literal "[n]" markers 7 → 0 and parsed citations 36 → 42 of 49, but 3-4 extra false refusals (`found: false`); accuracy not better (dev 39 vs 38 correct, held-out 19 vs 22) |
+| **Sentence-level context** (`CONTEXT_MODE=sentences`) | Cross-encoder picks the best 6 sentences (+1 neighbor each side) from the retrieved parents | ~4.5× faster (5 s vs 17-21 s), 800 vs 3,300 tokens; **single-fact lookups equal or better** (dev exact 25 vs 23/32, held-out 14 vs 14/17) but **conceptual answers worse** (held-out 6 vs 8 of 10) and once an invented answer |
+| **Adaptive context** (`CONTEXT_MODE=auto`, default) | Sentence-level for single-fact lookups ("How many…", "What percentage…"), full parents for everything else (`router.is_factoid_question`) | Estimated from the measured outputs: exact questions 25/32 dev and 14/17 held-out (≥ full context), conceptual unchanged, mean answer latency 16.5 s → 11.5 s on dev |
+| **Number-grounding check** (`GROUNDING_CHECK=1`, off) | Re-asks once if the answer states a number that appears nowhere in the retrieved text | Never fired: the model rarely invents numbers; its errors are the *wrong* number from the right page, which this can't see |
+
+The `auto` classifier agrees with the exact/conceptual labels on 67 of 76
+in-scope questions; what matters is that it sent **0 of 27 conceptual
+questions** to the fast path and 40 of 49 lookups (the other 9 safely fall
+back to full context). Its patterns were written after seeing the dev
+questions, so treat the 88% as mildly optimistic; the held-out set showed the
+same pattern as dev. The `auto` numbers are composed from measured
+sentence-mode and full-mode outputs (the router sends each question to one or
+the other, both measured), not from a separate end-to-end run, and the 3B
+model's run-to-run noise (several answers at this sample size) applies.
+
+**Defaults kept:** `PROMPT_VERSION=v1r` (structured output cleans up citations
+and off-topic refusals, 12/12 on held-out, but did not improve accuracy, so it
+is opt-in), `CONTEXT_MODE=auto`, `GROUNDING_CHECK` off.
+Honest takeaway: these tricks bought **speed and cleaner citations, not a
+large accuracy jump**; the remaining errors (wrong-paper answers, wrong figure
+from the right page, false refusals) look like the model's ceiling, which is
+why a larger model is the next experiment.
+
 ## Original evaluation and what it taught (400-token chunking, historical)
 
 This is the first full evaluation, run on the original flat 400-token chunks
