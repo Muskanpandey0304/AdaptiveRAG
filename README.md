@@ -92,32 +92,115 @@ streamlit run app.py
 
 ## Evaluation
 
-*Pending real evaluation data.* `eval/results.md` hasn't been generated yet:
-`data/raw/` has no real PDFs indexed, and `eval/questions.json` (40+
-real questions) hasn't been supplied. Per this project's rule against
-inventing evaluation numbers, no placeholder table is shown here — once
-both exist, running the three commands above (`ingest` → `indexer` →
-`eval`) will produce a real `eval/results.md`, and this section gets
-replaced with that table.
+Real run: 26 arXiv papers (NLP/LLM evaluation research, 2161 chunks),
+55 user-written questions (6 general, 32 exact, 17 conceptual), local
+`llama3.2:3b` via Ollama. Full numbers in [eval/results.md](eval/results.md).
+
+**hit@5** (retrieved chunk matches the gold source/page; `general`
+questions have no gold page and are excluded):
+
+| Config | overall | conceptual | exact |
+|---|---|---|---|
+| direct | 0.00 | 0.00 | 0.00 |
+| bm25 | 0.78 | 0.88 | 0.72 |
+| vector | 0.63 | 0.76 | 0.56 |
+| hybrid | 0.76 | 0.88 | 0.69 |
+| hybrid+rerank | 0.76 | 0.88 | 0.69 |
+| router | 0.76 | 0.88 | 0.69 |
+
+`direct`'s 0.00 is expected (it never retrieves). BM25 edges out hybrid
+specifically on `exact` questions (0.72 vs. 0.69) — fact/number lookups
+favor literal keyword matching over semantic similarity, which is the
+whole reason the router has a keyword route at all. Correctness itself
+is hand-graded in `eval/to_grade.csv` (0/1 column, left for the user to
+fill in) rather than invented here.
 
 ## What worked / what didn't
 
-*Pending real evaluation results* — see above. This section will be
-written from the actual `eval/results.md` output once it exists, not
-guessed in advance.
+**Worked:** The router correctly never escalated a genuinely strong
+keyword match (escalation rate 0.00% in this run), and `direct` costs
+almost nothing (mean latency 4.9s vs. 12-55s for anything touching
+retrieval) while correctly never fabricating an answer to a real
+document question (0.00 hit@5 is right, not a bug, for a route that
+has no context to retrieve from).
+
+**Didn't work, and why — the confidence gate let bad answers through
+more often than it should have.** The threshold sweep
+(`tune_thresholds()`, in `eval/results.md`) shows the current
+`VECTOR_MIN_SIM=0.45` gives a **100% false-answer rate on genuinely
+out-of-scope questions** when hybrid retrieval runs in isolation (via
+`force_route`) — every one of the 6 `general` test questions cleared
+the threshold and got an attempted answer instead of "Not found."
+Looking at the *actual* answers in `to_grade.csv` explains why, and
+it's more interesting than "the threshold is wrong":
+
+- Asked **"What is the capital of France?"**, the `bm25` config
+  answered `"Paris"` — correctly, but only because one of the papers
+  contains a benchmark Q&A example (`"What is the capital of
+  France?" → "Paris"`) almost verbatim. BM25 matched it on literal
+  text overlap, not because the corpus is actually about France.
+- Asked conversational questions ("Hi, how are you today?", "Can you
+  write me a poem about the ocean?", "What's the weather in Mumbai?"),
+  several configs retrieved chunks from papers *about* prompts,
+  jailbreaks, and LLM-evaluation benchmarks — and then the model
+  **completed or echoed the example prompt text it found**, rather
+  than recognizing it as unrelated sample data and refusing. One `bm25`
+  answer devolves into an unrelated all-caps "PRESIDENT OF THE UNITED
+  STATES" rant about the C programming language — almost certainly a
+  jailbreak-test string lifted straight from a retrieved chunk.
+- `hybrid` sometimes just ignored the "answer only from context"
+  instruction entirely and used its own general knowledge (writing an
+  actual ocean poem, describing Mumbai's real climate) — a real
+  instruction-following gap in a 3B local model, not a retrieval bug.
+- `vector` alone was the most reliable refuser of the three forced
+  single-method configs (correctly said "Not found" or gave a
+  reasonable refusal on 5 of 6 general questions) — lexical/BM25
+  matching was specifically what let irrelevant benchmark content leak
+  through, since a corpus of *papers about evaluating LLMs* is, ironically,
+  full of generic example questions that lexically resemble almost any
+  casual query.
+
+**Takeaway for an interview:** raising `VECTOR_MIN_SIM` alone won't
+fully fix this — the deeper issue is that BM25 can retrieve
+superficially relevant content from a domain-adjacent corpus (papers
+*about* QA benchmarks and jailbreaks naturally contain QA- and
+jailbreak-shaped text), and a 3B local model doesn't reliably resist
+completing what it retrieves. A production fix would need either a
+stricter "is this chunk's content actually relevant, or just
+textually similar" check, or a larger/better-instructed model.
+
+**Latency numbers in `eval/results.md` should be read as rough orders
+of magnitude, not a clean strategy comparison** — this run shared a
+resource-constrained machine with other running applications, and
+later configs (e.g. `router`, mean 54.8s) measurably slowed down under
+memory pressure partway through the run, independent of the strategy
+itself. The hit@5 numbers aren't affected by this (they don't depend
+on wall-clock speed), only the latency/p95 columns are.
 
 ## Limitations
 
-- No real document corpus is indexed yet; every test in this repo runs
-  against small synthetic fixtures built in-memory for that test.
+- The automated test suite still runs against small synthetic fixtures
+  (not the real corpus) for speed and determinism; the real corpus is
+  only exercised by `python -m src.eval` and manual use.
 - Chunking's paragraph-boundary detection depends on the PDF text
   extraction preserving blank-line breaks, which many PDFs don't encode;
   in practice, chunking mostly falls through to the sentence-boundary
   step (see `DECISIONS.md`).
 - Token counts are approximate (`word count × 1.3`), not an exact match
   for any specific model's tokenizer.
-- `BM25_MIN_SCORE` and `VECTOR_MIN_SIM` are placeholders until
-  `src.eval.tune_thresholds()` is run against real data.
+- `BM25_MIN_SCORE=5.0` and `VECTOR_MIN_SIM=0.45` are still the spec's
+  placeholder values — `tune_thresholds()` has now run against real
+  data (see Evaluation above) and shows neither threshold alone fixes
+  false answers on out-of-scope questions; the root cause is retrieval
+  returning superficially-matching but irrelevant content, not just a
+  miscalibrated number. Raising `VECTOR_MIN_SIM` was not applied
+  automatically, per this project's rule that the user decides.
+- A corpus of papers *about* LLM evaluation/benchmarks/jailbreaks
+  contains example Q&A pairs and adversarial prompt text as part of its
+  normal content — retrieval can surface this for an unrelated query,
+  and the local 3B model sometimes completes or echoes it instead of
+  refusing. This is a property of this specific corpus choice, not a
+  general flaw in the pipeline.
 - The router's patterns are heuristics, not a learned classifier — e.g. a
   mixed-case proper noun (like a product name) inside an otherwise
   conceptual question can trigger the `camel_case_token` keyword rule.
