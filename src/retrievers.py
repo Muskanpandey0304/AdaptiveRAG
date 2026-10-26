@@ -10,7 +10,7 @@ import numpy as np
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from src.config import CANDIDATES_K, EMBED_MODEL, QUERY_PREFIX, RERANK_MODEL, RRF_K
-from src.indexer import BM25_PATH, CHUNKS_PATH, FAISS_PATH, tokenize
+from src.indexer import BM25_PATH, CENTROID_PATH, CHUNKS_PATH, FAISS_PATH, tokenize
 
 
 @dataclass
@@ -52,12 +52,18 @@ class Retriever:
         chunks_path: Path = CHUNKS_PATH,
         faiss_path: Path = FAISS_PATH,
         bm25_path: Path = BM25_PATH,
+        centroid_path: Path = CENTROID_PATH,
     ) -> None:
         with open(chunks_path, encoding="utf-8") as f:
             self.chunks: list[dict] = json.load(f)
         self.faiss_index = faiss.read_index(str(faiss_path))
         with open(bm25_path, "rb") as f:
             self.bm25_index = pickle.load(f)
+
+        # Optional: indexes built before this feature existed won't have
+        # one yet. centroid_similarity() raises a clear error rather than
+        # silently returning a meaningless number if it's missing.
+        self.centroid: np.ndarray | None = np.load(centroid_path) if Path(centroid_path).exists() else None
 
         # Both models are sizeable downloads/loads; only pay for them if a
         # method that actually needs them gets called.
@@ -93,6 +99,21 @@ class Retriever:
                 continue
             hits.append(Hit(chunk_id=int(idx), score=float(score), chunk=self.chunks[idx]))
         return hits
+
+    def centroid_similarity(self, query: str) -> float:
+        """Cosine similarity between `query` and the corpus's overall
+        centroid embedding -- "is this topic broadly like my corpus at
+        all," independent of whether any single chunk happens to match.
+
+        Raises if the index was built before centroid.npy existed; the
+        fix is re-running `python -m src.indexer`, not silently returning
+        a meaningless number.
+        """
+        if self.centroid is None:
+            raise RuntimeError(f"{CENTROID_PATH} not found. Re-run `python -m src.indexer` to build it.")
+        query_vec = self.embed_model.encode([QUERY_PREFIX + query], normalize_embeddings=True)
+        query_vec = np.asarray(query_vec, dtype="float32")[0]
+        return float(np.dot(query_vec, self.centroid))
 
     def bm25_search(self, query: str, k: int) -> list[Hit]:
         """Score every chunk with BM25 and return the top k, best first."""

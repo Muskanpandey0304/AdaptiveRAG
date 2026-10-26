@@ -11,11 +11,12 @@ import pickle
 from pathlib import Path
 
 import faiss
+import numpy as np
 import pytest
 from streamlit.testing.v1 import AppTest
 
 import src.pipeline as pipeline
-from src.indexer import build_bm25_index, build_vector_index
+from src.indexer import build_bm25_index, build_vector_index, compute_centroid
 from src.llm import LLMResult
 from src.retrievers import Retriever
 
@@ -55,14 +56,19 @@ def synthetic_retriever(tmp_path, monkeypatch) -> Retriever:
     chunks_path = tmp_path / "chunks.json"
     faiss_path = tmp_path / "faiss.index"
     bm25_path = tmp_path / "bm25.pkl"
+    centroid_path = tmp_path / "centroid.npy"
 
     with open(chunks_path, "w", encoding="utf-8") as f:
         json.dump(chunks, f)
-    faiss.write_index(build_vector_index(chunks), str(faiss_path))
+    vector_index = build_vector_index(chunks)
+    faiss.write_index(vector_index, str(faiss_path))
     with open(bm25_path, "wb") as f:
         pickle.dump(build_bm25_index(chunks), f)
+    np.save(centroid_path, compute_centroid(vector_index))
 
-    retriever = Retriever(chunks_path=chunks_path, faiss_path=faiss_path, bm25_path=bm25_path)
+    retriever = Retriever(
+        chunks_path=chunks_path, faiss_path=faiss_path, bm25_path=bm25_path, centroid_path=centroid_path
+    )
     monkeypatch.setattr(pipeline, "_retriever", retriever)
     return retriever
 

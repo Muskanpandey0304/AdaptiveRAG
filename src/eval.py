@@ -89,6 +89,7 @@ def run_config(config_name: str, questions: list[dict]) -> list[dict]:
                 "reason": result.reason,
                 "escalated": result.escalated,
                 "confidence": result.confidence,
+                "centroid_sim": result.centroid_sim,
                 "latency_s": result.latency_s,
                 "tokens_in": result.tokens_in,
                 "tokens_out": result.tokens_out,

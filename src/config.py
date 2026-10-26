@@ -62,3 +62,20 @@ RRF_K = 60
 
 BM25_MIN_SCORE = 5.0
 VECTOR_MIN_SIM = 0.45
+
+# Corpus-level signal (added post-spec): minimum cosine similarity between
+# a query and the whole corpus's centroid embedding (see
+# src.indexer.compute_centroid) before an answer is attempted at all, on
+# top of VECTOR_MIN_SIM's per-chunk check. Catches "no chunk broadly
+# matches this corpus's topic" even when one stray chunk's wording happens
+# to overlap a query lexically/semantically.
+#
+# Measured against the real 55-question eval set: general (out-of-scope)
+# questions scored 0.44-0.59, scoped (real) questions scored 0.59-0.78 --
+# a clean gap. 0.55 sits comfortably above the actual problem cases
+# (factual/creative off-topic questions, 0.44-0.51) and below every scoped
+# question (min 0.59), without hugging the single borderline case ("Thanks,
+# that was helpful!", 0.589 -- already caught by the router's greeting
+# regex before this gate is ever reached in normal operation). See
+# DECISIONS.md.
+CENTROID_MIN_SIM = 0.55

@@ -24,6 +24,7 @@ def _result(hits: list[Hit], confidence: float = 0.5) -> Result:
         reason="default",
         escalated=False,
         confidence=confidence,
+        centroid_sim=0.6,
         latency_s=0.1,
         tokens_in=10,
         tokens_out=5,

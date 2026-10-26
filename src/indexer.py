@@ -18,6 +18,7 @@ from src.config import EMBED_MODEL
 CHUNKS_PATH = Path("data/index/chunks.json")
 FAISS_PATH = Path("data/index/faiss.index")
 BM25_PATH = Path("data/index/bm25.pkl")
+CENTROID_PATH = Path("data/index/centroid.npy")
 
 _TOKEN_RE = re.compile(r"\w+")
 
@@ -57,6 +58,24 @@ def build_bm25_index(chunks: list[dict]) -> BM25Okapi:
     return BM25Okapi(tokenized_chunks)
 
 
+def compute_centroid(vector_index: faiss.Index) -> np.ndarray:
+    """Average embedding across every chunk in `vector_index`, re-normalized
+    to unit length.
+
+    This is a corpus-level "what is this collection broadly about" signal,
+    distinct from any single chunk's similarity to a query. A query whose
+    embedding is far from this centroid is topically unlike the corpus as a
+    whole, even if one stray chunk happens to score high against it (e.g. a
+    benchmark paper's example Q&A pair that lexically resembles an unrelated
+    question). Reconstructed directly from the index rather than
+    re-embedding, since IndexFlatIP already stores the normalized vectors.
+    """
+    embeddings = vector_index.reconstruct_n(0, vector_index.ntotal)
+    centroid = embeddings.mean(axis=0)
+    centroid = centroid / np.linalg.norm(centroid)
+    return centroid.astype("float32")
+
+
 def main() -> None:
     """CLI entry point: build and save both indexes from chunks.json."""
     if not CHUNKS_PATH.exists():
@@ -72,11 +91,14 @@ def main() -> None:
     vector_index = build_vector_index(chunks)
     faiss.write_index(vector_index, str(FAISS_PATH))
 
+    centroid = compute_centroid(vector_index)
+    np.save(CENTROID_PATH, centroid)
+
     bm25_index = build_bm25_index(chunks)
     with open(BM25_PATH, "wb") as f:
         pickle.dump(bm25_index, f)
 
-    print(f"Indexed {len(chunks)} chunks -> {FAISS_PATH}, {BM25_PATH}")
+    print(f"Indexed {len(chunks)} chunks -> {FAISS_PATH}, {BM25_PATH}, {CENTROID_PATH}")
 
 
 if __name__ == "__main__":

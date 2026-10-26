@@ -11,10 +11,11 @@ import json
 import pickle
 
 import faiss
+import numpy as np
 import pytest
 
 import src.pipeline as pipeline
-from src.indexer import build_bm25_index, build_vector_index
+from src.indexer import build_bm25_index, build_vector_index, compute_centroid
 from src.llm import LLMResult
 from src.retrievers import Retriever
 
@@ -30,22 +31,30 @@ def _fastapi_chunks() -> list[dict]:
     return [{"id": i, "text": text, "source": "fastapi.pdf", "page": 1} for i, text in enumerate(topics)]
 
 
-@pytest.fixture
-def synthetic_retriever(tmp_path, monkeypatch) -> Retriever:
-    chunks = _fastapi_chunks()
+def _build_retriever_with_centroid(tmp_path, chunks: list[dict], monkeypatch) -> Retriever:
     chunks_path = tmp_path / "chunks.json"
     faiss_path = tmp_path / "faiss.index"
     bm25_path = tmp_path / "bm25.pkl"
+    centroid_path = tmp_path / "centroid.npy"
 
     with open(chunks_path, "w", encoding="utf-8") as f:
         json.dump(chunks, f)
-    faiss.write_index(build_vector_index(chunks), str(faiss_path))
+    vector_index = build_vector_index(chunks)
+    faiss.write_index(vector_index, str(faiss_path))
     with open(bm25_path, "wb") as f:
         pickle.dump(build_bm25_index(chunks), f)
+    np.save(centroid_path, compute_centroid(vector_index))
 
-    retriever = Retriever(chunks_path=chunks_path, faiss_path=faiss_path, bm25_path=bm25_path)
+    retriever = Retriever(
+        chunks_path=chunks_path, faiss_path=faiss_path, bm25_path=bm25_path, centroid_path=centroid_path
+    )
     monkeypatch.setattr(pipeline, "_retriever", retriever)
     return retriever
+
+
+@pytest.fixture
+def synthetic_retriever(tmp_path, monkeypatch) -> Retriever:
+    return _build_retriever_with_centroid(tmp_path, _fastapi_chunks(), monkeypatch)
 
 
 def test_out_of_domain_question_returns_not_found(synthetic_retriever) -> None:
@@ -79,20 +88,7 @@ def _wide_fastapi_chunks() -> list[dict]:
 
 @pytest.fixture
 def wide_synthetic_retriever(tmp_path, monkeypatch) -> Retriever:
-    chunks = _wide_fastapi_chunks()
-    chunks_path = tmp_path / "chunks.json"
-    faiss_path = tmp_path / "faiss.index"
-    bm25_path = tmp_path / "bm25.pkl"
-
-    with open(chunks_path, "w", encoding="utf-8") as f:
-        json.dump(chunks, f)
-    faiss.write_index(build_vector_index(chunks), str(faiss_path))
-    with open(bm25_path, "wb") as f:
-        pickle.dump(build_bm25_index(chunks), f)
-
-    retriever = Retriever(chunks_path=chunks_path, faiss_path=faiss_path, bm25_path=bm25_path)
-    monkeypatch.setattr(pipeline, "_retriever", retriever)
-    return retriever
+    return _build_retriever_with_centroid(tmp_path, _wide_fastapi_chunks(), monkeypatch)
 
 
 def test_expand_neighbors_adds_hits_beyond_top_k(wide_synthetic_retriever, monkeypatch) -> None:
@@ -109,6 +105,36 @@ def test_expand_neighbors_adds_hits_beyond_top_k(wide_synthetic_retriever, monke
     # Neighbor expansion must never change the confidence that was already
     # checked against VECTOR_MIN_SIM before expansion happened.
     assert with_expansion.confidence == without.confidence
+
+
+def _chunks_with_decoy() -> list[dict]:
+    """A FastAPI corpus with one decoy chunk that happens to contain an
+    off-topic benchmark-style Q&A pair -- the same shape as the real
+    "What is the capital of France?" failure found during evaluation."""
+    topics = [
+        "FastAPI is a modern Python web framework for building APIs.",
+        "Uvicorn is the ASGI server used to run FastAPI applications.",
+        "Pydantic models validate FastAPI request and response bodies.",
+        "Dependency injection in FastAPI is handled by the Depends function.",
+        "FastAPI automatically generates OpenAPI and Swagger documentation.",
+        "Example benchmark question: What is the capital of France? Answer: Paris.",
+    ]
+    return [{"id": i, "text": text, "source": "fastapi.pdf", "page": 1} for i, text in enumerate(topics)]
+
+
+@pytest.fixture
+def decoy_retriever(tmp_path, monkeypatch) -> Retriever:
+    return _build_retriever_with_centroid(tmp_path, _chunks_with_decoy(), monkeypatch)
+
+
+def test_centroid_gate_catches_a_decoy_chunk_despite_high_per_chunk_confidence(decoy_retriever) -> None:
+    """The decoy chunk should score a high per-chunk match for this
+    off-topic query (it nearly contains the question verbatim), but the
+    corpus's overall topic is FastAPI, not geography -- the centroid gate
+    should catch what the per-chunk confidence alone would miss."""
+    result = pipeline.ask("What is the capital of France?", force_route="hybrid")
+    assert result.answer.text == pipeline.NOT_FOUND_TEXT
+    assert result.answer.tokens_in == 0  # no LLM call -- caught before generation
 
 
 def test_force_route_direct_bypasses_router(monkeypatch) -> None:

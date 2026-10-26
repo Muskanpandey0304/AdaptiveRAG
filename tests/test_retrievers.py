@@ -10,9 +10,10 @@ import json
 import pickle
 
 import faiss
+import numpy as np
 import pytest
 
-from src.indexer import build_bm25_index, build_vector_index
+from src.indexer import build_bm25_index, build_vector_index, compute_centroid
 from src.retrievers import Hit, Retriever, _fuse_rrf
 
 
@@ -30,19 +31,23 @@ def _chunks() -> list[dict]:
     return [{"id": i, "text": text, "source": "fastapi.pdf", "page": 1} for i, text in enumerate(topics)]
 
 
-def _build_retriever(tmp_path, chunks: list[dict]) -> Retriever:
+def _build_retriever(tmp_path, chunks: list[dict], with_centroid: bool = True) -> Retriever:
     chunks_path = tmp_path / "chunks.json"
     faiss_path = tmp_path / "faiss.index"
     bm25_path = tmp_path / "bm25.pkl"
+    centroid_path = tmp_path / "centroid.npy"
 
     with open(chunks_path, "w", encoding="utf-8") as f:
         json.dump(chunks, f)
 
-    faiss.write_index(build_vector_index(chunks), str(faiss_path))
+    vector_index = build_vector_index(chunks)
+    faiss.write_index(vector_index, str(faiss_path))
     with open(bm25_path, "wb") as f:
         pickle.dump(build_bm25_index(chunks), f)
+    if with_centroid:
+        np.save(centroid_path, compute_centroid(vector_index))
 
-    return Retriever(chunks_path=chunks_path, faiss_path=faiss_path, bm25_path=bm25_path)
+    return Retriever(chunks_path=chunks_path, faiss_path=faiss_path, bm25_path=bm25_path, centroid_path=centroid_path)
 
 
 @pytest.fixture(scope="module")
@@ -134,3 +139,15 @@ def test_expand_neighbors_does_not_cross_source_boundary(tmp_path) -> None:
     ids = [h.chunk_id for h in expanded]
     assert 0 not in ids  # adjacent id, but a different source -- must not be pulled in
     assert ids == [1, 2]
+
+
+def test_centroid_similarity_higher_for_on_topic_query(retriever) -> None:
+    on_topic = retriever.centroid_similarity("What ASGI server does FastAPI use?")
+    off_topic = retriever.centroid_similarity("What is the boiling point of mercury on Mars?")
+    assert on_topic > off_topic
+
+
+def test_centroid_similarity_raises_without_a_built_centroid(tmp_path) -> None:
+    retriever_without_centroid = _build_retriever(tmp_path, _chunks(), with_centroid=False)
+    with pytest.raises(RuntimeError):
+        retriever_without_centroid.centroid_similarity("anything")

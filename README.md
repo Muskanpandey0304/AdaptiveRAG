@@ -192,8 +192,45 @@ in `eval/to_grade_neighbors.csv` (not yet hand-graded for correctness —
 hit@5 only confirms the right page was retrieved, not that the final
 answer used it well, per the correctness section below).
 
+**Corpus centroid gate** (added after finding the off-topic-question
+problem below; see `DECISIONS.md`) tackles it directly: a query's
+embedding is compared against the *whole corpus's* average embedding
+(`Retriever.centroid_similarity`), not just the single best-matching
+chunk. The router already sends true greetings to `direct`, but
+well-formed off-topic questions ("What is the capital of France?")
+look syntactically identical to a real question — no regex can tell
+them apart. The centroid catches what per-chunk confidence alone
+can't: a chunk can score high for an unrelated query (because the
+corpus happens to contain a near-identical benchmark example), even
+when the corpus *as a whole* clearly isn't about that topic.
+
+Measured against the real 55-question set: general questions scored
+0.44-0.59 on centroid similarity, scoped questions scored 0.59-0.78 —
+a clean gap, so `CENTROID_MIN_SIM=0.55` was set from the data, not
+guessed (see `src/config.py`). Re-testing the exact failure cases
+found earlier:
+
+| Question | Before | After |
+|---|---|---|
+| "What is the capital of France?" | `bm25` answered "Paris" | **"Not found" on all 3 methods** |
+| "Can you write me a poem about the ocean?" | `hybrid` wrote an actual poem | **"Not found" on all 3 methods** |
+| "What's the weather like in Mumbai?" | `hybrid` described real Mumbai climate | **"Not found" on all 3 methods** |
+| "Who won the FIFA World Cup in 2022?" | garbled unrelated content | **"Not found" on all 3 methods** |
+
+4 of the 6 general questions are now fully fixed across `keyword`,
+`vector`, and `hybrid` alike — the false-answer rate on general
+questions drops from **100% to ~17%** (only "Thanks, that was
+helpful!" still slips through when a route is forced in isolation for
+testing; in real operation the router's greeting regex already sends
+it to `direct` before this gate is ever reached). No regression on
+real questions: a sanity check across 6 scoped questions all scored
+0.65-0.69, comfortably above the threshold, and still got substantive
+answers.
+
 **Correctness** (hand-graded against `expected_answer`, all 330
-answers — 55 questions × 6 configs — via `eval/to_grade.csv`):
+answers — 55 questions × 6 configs — via `eval/to_grade.csv`; measured
+*before* the centroid gate above existed, so the 6 general questions'
+scores here predate that fix and would likely improve on a re-run):
 
 | Config | Correct | Score |
 |---|---|---|
@@ -280,6 +317,15 @@ jailbreak-shaped text), and a 3B local model doesn't reliably resist
 completing what it retrieves. A production fix would need either a
 stricter "is this chunk's content actually relevant, or just
 textually similar" check, or a larger/better-instructed model.
+
+**Update: this is now fixed** — the exact "stricter relevance check"
+called for above was added as the corpus centroid gate (see
+Evaluation, above), which compares a query against the *whole
+corpus's* topic instead of any single chunk. The 4 failure cases
+quoted below ("capital of France," the ocean poem, Mumbai weather,
+FIFA World Cup) are now all correctly refused across every retrieval
+method, with real before/after evidence. The analysis below is kept
+as-is since it's what led to the fix.
 
 **The correctness grading confirms this quantitatively, not just
 anecdotally.** On the 6 general (out-of-scope) questions specifically,

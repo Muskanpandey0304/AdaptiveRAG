@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.config import BM25_MIN_SCORE, TOP_K, VECTOR_MIN_SIM
+from src.config import BM25_MIN_SCORE, CENTROID_MIN_SIM, TOP_K, VECTOR_MIN_SIM
 from src.generator import Answer, answer_direct, answer_with_context
 from src.retrievers import Hit, Retriever
 from src.router import route
@@ -41,6 +41,7 @@ class Result:
     reason: str
     escalated: bool
     confidence: float | None
+    centroid_sim: float | None
     latency_s: float
     tokens_in: int
     tokens_out: int
@@ -75,7 +76,7 @@ def _expand_if_enabled(hits: list[Hit], expand_neighbors: bool) -> list[Hit]:
     return _get_retriever().expand_neighbors(hits, window=1)
 
 
-def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[Answer, float, list[Hit]]:
+def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[Answer, float, float, list[Hit]]:
     """Hybrid retrieval + generation. Shared by the hybrid route and by
     keyword-route escalation, since escalation *is* "run the hybrid flow"."""
     hits = _get_retriever().hybrid_search(query, TOP_K)
@@ -84,24 +85,26 @@ def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[A
         confidence = hits[0].score
     else:
         confidence = hits[0].meta.get("vector_sim", 0.0) if hits else 0.0
+    centroid_sim = _get_retriever().centroid_similarity(query)
 
-    if confidence < VECTOR_MIN_SIM:
-        return _not_found_answer(), confidence, hits
+    if confidence < VECTOR_MIN_SIM or centroid_sim < CENTROID_MIN_SIM:
+        return _not_found_answer(), confidence, centroid_sim, hits
     hits = _expand_if_enabled(hits, expand_neighbors)
-    return _normalize_not_found(answer_with_context(query, hits)), confidence, hits
+    return _normalize_not_found(answer_with_context(query, hits)), confidence, centroid_sim, hits
 
 
-def _run_vector(query: str, expand_neighbors: bool) -> tuple[Answer, float, list[Hit]]:
+def _run_vector(query: str, expand_neighbors: bool) -> tuple[Answer, float, float, list[Hit]]:
     """Plain top-TOP_K vector search then generate -- the Step 6 baseline,
     reachable via force_route="vector" so eval can compare the router
     against it."""
     hits = _get_retriever().vector_search(query, TOP_K)
     confidence = hits[0].score if hits else 0.0
+    centroid_sim = _get_retriever().centroid_similarity(query)
 
-    if confidence < VECTOR_MIN_SIM:
-        return _not_found_answer(), confidence, hits
+    if confidence < VECTOR_MIN_SIM or centroid_sim < CENTROID_MIN_SIM:
+        return _not_found_answer(), confidence, centroid_sim, hits
     hits = _expand_if_enabled(hits, expand_neighbors)
-    return _normalize_not_found(answer_with_context(query, hits)), confidence, hits
+    return _normalize_not_found(answer_with_context(query, hits)), confidence, centroid_sim, hits
 
 
 def _log(result: Result, query: str) -> None:
@@ -113,6 +116,7 @@ def _log(result: Result, query: str) -> None:
         "reason": result.reason,
         "escalated": result.escalated,
         "confidence": result.confidence,
+        "centroid_sim": result.centroid_sim,
         "latency_s": result.latency_s,
         "tokens_in": result.tokens_in,
         "tokens_out": result.tokens_out,
@@ -141,6 +145,12 @@ def ask(
     Applied only on an actual answer attempt (not a confidence-gated
     miss), and `result.hits` reflects the expanded set, since that's what
     was actually available to the LLM.
+
+    Every route that touches retrieval (keyword/vector/hybrid) also
+    checks `Retriever.centroid_similarity(query)` against
+    `CENTROID_MIN_SIM` before generating -- a corpus-level "is this query
+    broadly like my documents at all" signal, on top of each method's own
+    per-chunk confidence check. Added post-spec: see DECISIONS.md.
     """
     start = time.perf_counter()
 
@@ -152,6 +162,7 @@ def ask(
 
     hits: list[Hit] = []
     confidence: float | None = None
+    centroid_sim: float | None = None
 
     if chosen_route == "direct":
         answer = answer_direct(query)
@@ -161,16 +172,25 @@ def ask(
         confidence = hits[0].score if hits else 0.0
         if force_route is None and confidence < BM25_MIN_SCORE:
             escalated = True
-            answer, confidence, hits = _run_hybrid(query, use_rerank, expand_neighbors)
+            answer, confidence, centroid_sim, hits = _run_hybrid(query, use_rerank, expand_neighbors)
         else:
-            hits = _expand_if_enabled(hits, expand_neighbors)
-            answer = _normalize_not_found(answer_with_context(query, hits))
+            # BM25's literal keyword matching is exactly what let an
+            # off-topic query match a corpus's own example Q&A/benchmark
+            # text (e.g. "What is the capital of France?" matching a
+            # paper's sample question) -- the centroid gate catches that
+            # even when BM25's own score looks confident.
+            centroid_sim = _get_retriever().centroid_similarity(query)
+            if centroid_sim < CENTROID_MIN_SIM:
+                answer = _not_found_answer()
+            else:
+                hits = _expand_if_enabled(hits, expand_neighbors)
+                answer = _normalize_not_found(answer_with_context(query, hits))
 
     elif chosen_route == "vector":
-        answer, confidence, hits = _run_vector(query, expand_neighbors)
+        answer, confidence, centroid_sim, hits = _run_vector(query, expand_neighbors)
 
     else:  # "hybrid"
-        answer, confidence, hits = _run_hybrid(query, use_rerank, expand_neighbors)
+        answer, confidence, centroid_sim, hits = _run_hybrid(query, use_rerank, expand_neighbors)
 
     latency_s = time.perf_counter() - start
     result = Result(
@@ -179,6 +199,7 @@ def ask(
         reason=reason,
         escalated=escalated,
         confidence=confidence,
+        centroid_sim=centroid_sim,
         latency_s=latency_s,
         tokens_in=answer.tokens_in,
         tokens_out=answer.tokens_out,
