@@ -104,6 +104,10 @@ class Retriever:
         # method that actually needs them gets called.
         self._embed_model: SentenceTransformer | None = None
         self._reranker: CrossEncoder | None = None
+        # Query embeddings by query string: a hybrid query needs the same
+        # vector for the vector search and the centroid check, and eval reruns
+        # repeat queries. Small and bounded; see _query_vector.
+        self._query_vectors: dict[str, np.ndarray] = {}
 
     @property
     def embed_model(self) -> SentenceTransformer:
@@ -117,6 +121,18 @@ class Retriever:
             self._reranker = CrossEncoder(RERANK_MODEL)
         return self._reranker
 
+    def _query_vector(self, query: str) -> np.ndarray:
+        """The normalized embedding of `query` (with the model's query prefix),
+        computed once and reused by vector_search and centroid_similarity."""
+        vector = self._query_vectors.get(query)
+        if vector is None:
+            encoded = self.embed_model.encode([QUERY_PREFIX + query], normalize_embeddings=True)
+            vector = np.asarray(encoded, dtype="float32")[0]
+            if len(self._query_vectors) >= 256:  # evict the oldest; dicts keep insertion order
+                self._query_vectors.pop(next(iter(self._query_vectors)))
+            self._query_vectors[query] = vector
+        return vector
+
     def vector_search(self, query: str, k: int) -> list[Hit]:
         """Embed `query` with the BGE query prefix and search FAISS.
 
@@ -124,8 +140,7 @@ class Retriever:
         (highest inner product = most similar, since embeddings are
         normalized so inner product equals cosine similarity).
         """
-        query_vec = self.embed_model.encode([QUERY_PREFIX + query], normalize_embeddings=True)
-        query_vec = np.asarray(query_vec, dtype="float32")
+        query_vec = self._query_vector(query)[None, :]  # FAISS wants a 2-D batch
         scores, indices = self.faiss_index.search(query_vec, k)
 
         hits = []
@@ -146,9 +161,7 @@ class Retriever:
         """
         if self.centroid is None:
             raise RuntimeError(f"{CENTROID_PATH} not found. Re-run `python -m src.indexer` to build it.")
-        query_vec = self.embed_model.encode([QUERY_PREFIX + query], normalize_embeddings=True)
-        query_vec = np.asarray(query_vec, dtype="float32")[0]
-        return float(np.dot(query_vec, self.centroid))
+        return float(np.dot(self._query_vector(query), self.centroid))
 
     def bm25_search(self, query: str, k: int) -> list[Hit]:
         """Score every chunk with BM25 and return the top k, best first."""

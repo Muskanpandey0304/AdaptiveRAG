@@ -222,3 +222,23 @@ def test_select_sentences_keeps_the_relevant_sentence_and_its_neighbors(tmp_path
     assert (out[0].chunk["source"], out[0].chunk["page"], out[0].chunk_id) == ("a.pdf", 3, 0)
     assert out[0].meta["compressed"] is True and out[0].meta["vector_sim"] == 0.8
     assert hit.chunk["text"] == text  # the input hit is not modified
+
+
+def test_query_is_embedded_once_across_vector_search_and_centroid_check(retriever, monkeypatch) -> None:
+    """A hybrid question needs the same query vector twice; encode it once."""
+    import numpy as np
+
+    real_encode = retriever.embed_model.encode
+    calls = []
+
+    def counting_encode(*args, **kwargs):
+        calls.append(1)
+        return real_encode(*args, **kwargs)
+
+    monkeypatch.setattr(retriever.embed_model, "encode", counting_encode)
+    monkeypatch.setattr(retriever, "centroid", np.ones(retriever.faiss_index.d, dtype="float32"))
+    retriever.vector_search("How do I validate a request body?", 3)
+    retriever.centroid_similarity("How do I validate a request body?")
+    assert len(calls) == 1
+    retriever.vector_search("a different question", 3)
+    assert len(calls) == 2

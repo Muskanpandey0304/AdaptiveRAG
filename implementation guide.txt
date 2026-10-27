@@ -240,6 +240,25 @@ STEP 1 - SAFETY AND SPEED (all CERTAIN, ~2 hours)
   Do not: Use st.cache_data on ask() with no key on settings; it would
           serve stale answers after a config change.
 
+STEP 1 STATUS: DONE (all five). Measured on this machine (GTX 1650, 3B model):
+  - num_ctx: 8192 pinned (config LLM_NUM_CTX). `ollama ps` shows CONTEXT 8192.
+    Warm LLM latency for one question: 27.8 s at 4096, 28.9 s at 6144, 29.0 s
+    at 8192, so the window costs ~4%. The model sits 67-80% on the GPU at any
+    of them (the 4 GB card cannot hold it all). Kept 8192 for headroom.
+  - keep_alive 10m: `ollama ps` shows the model resident for 10 min.
+  - Retry/timeout: only ConnectionError/httpx connect+timeout errors retry
+    (ollama.ResponseError, e.g. model not found, raises at once); latency is
+    timed per attempt. LLM_TIMEOUT_S=180.
+  - Query embedding is cached (Retriever._query_vector), 1 encode per query.
+  - app.py uses st.form + session_state + spinner + friendly errors; tests
+    must click the form button (at.button[0].click()). New tests prove a
+    checkbox change does not call the LLM again.
+  - 130 tests pass. NOT yet verified: whether the 76 old 2,050-token calls
+    changed any earlier README number; re-running the dev/held-out evals
+    with the pinned window would show it.
+  - Gotcha for later: the first call after changing num_ctx reloads the
+    model (~15-20 s extra).
+
 Commit Step 1 as one commit; README untouched except the run notes.
 
 =======================================================================

@@ -30,6 +30,21 @@ API_KEY: str = os.getenv("API_KEY", "")
 # mean latency to 63s). Real answers here are well under 200 tokens.
 LLM_MAX_TOKENS = 512
 
+# Context window passed to Ollama. Without it Ollama uses its own default
+# (2,048 or 4,096 tokens depending on version) and silently drops the START of
+# a prompt that is longer: logs/queries.jsonl has 76 early calls with exactly
+# 2,050 input tokens, the signature of that cut. Our prompts reach ~4,300
+# tokens (5 parents of ~600 tokens plus instructions); 8,192 leaves headroom.
+LLM_NUM_CTX = int(os.getenv("LLM_NUM_CTX", "8192"))
+
+# How long Ollama keeps the model in memory after a call, so a pause between
+# questions doesn't pay the reload. Longer = more RAM held while idle.
+LLM_KEEP_ALIVE: str = os.getenv("LLM_KEEP_ALIVE", "10m")
+
+# Per-request timeout in seconds, so a hung call can't block an eval forever.
+# The slowest answer seen is ~80 s on CPU with the 8B model.
+LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "180"))
+
 # Answer-prompt version for the generator ("v1", "v1r" or "v2"; see
 # DECISIONS.md for the A/B). "v1" is the original prompt. "v1r" is v1 plus one
 # retry when the reply has no answer text (a 3B model often answers with just

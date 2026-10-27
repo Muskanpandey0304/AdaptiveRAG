@@ -28,28 +28,50 @@ def test_generate_returns_nonempty_text() -> None:
     assert result.text.strip() != ""
 
 
-def test_ollama_call_caps_output_and_is_deterministic(monkeypatch) -> None:
-    """Regression: with no num_predict, a looping model produced a ~209K-char answer."""
+class _Msg:
+    content = "ok"
+
+
+class _Resp:
+    message = _Msg()
+    prompt_eval_count = 1
+    eval_count = 1
+
+
+def _fake_client(monkeypatch, chat):
+    """Make src.llm build a fake ollama.Client whose chat() is `chat`."""
     import src.llm as llm_module
-    from src.config import LLM_MAX_TOKENS, LLM_TEMPERATURE
+
+    created = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            created["kwargs"] = kwargs
+
+        def chat(self, model, messages, **kwargs):
+            return chat(model, messages, **kwargs)
+
+    monkeypatch.setattr(llm_module.ollama, "Client", FakeClient)
+    return created
+
+
+def test_ollama_call_caps_output_pins_context_and_is_deterministic(monkeypatch) -> None:
+    """Regression: with no num_predict, a looping model produced a ~209K-char answer.
+    num_ctx is pinned because Ollama silently truncates prompts past its default window."""
+    import src.llm as llm_module
+    from src.config import LLM_KEEP_ALIVE, LLM_MAX_TOKENS, LLM_NUM_CTX, LLM_TEMPERATURE, LLM_TIMEOUT_S
 
     seen = {}
 
-    class _Msg:
-        content = "ok"
-
-    class _Resp:
-        message = _Msg()
-        prompt_eval_count = 1
-        eval_count = 1
-
-    def fake_chat(model, messages, options=None):
-        seen["options"] = options
+    def chat(model, messages, **kwargs):
+        seen.update(kwargs)
         return _Resp()
 
-    monkeypatch.setattr(llm_module.ollama, "chat", fake_chat)
+    created = _fake_client(monkeypatch, chat)
     llm_module.generate("hi")
-    assert seen["options"] == {"num_predict": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE}
+    assert seen["options"] == {"num_predict": LLM_MAX_TOKENS, "temperature": LLM_TEMPERATURE, "num_ctx": LLM_NUM_CTX}
+    assert seen["keep_alive"] == LLM_KEEP_ALIVE
+    assert created["kwargs"] == {"timeout": LLM_TIMEOUT_S}
 
 
 def test_ollama_call_passes_a_json_schema_only_when_given(monkeypatch) -> None:
@@ -57,21 +79,64 @@ def test_ollama_call_passes_a_json_schema_only_when_given(monkeypatch) -> None:
 
     seen = []
 
-    class _Msg:
-        content = "{}"
-
-    class _Resp:
-        message = _Msg()
-        prompt_eval_count = 1
-        eval_count = 1
-
-    def fake_chat(model, messages, **kwargs):
+    def chat(model, messages, **kwargs):
         seen.append(kwargs)
         return _Resp()
 
-    monkeypatch.setattr(llm_module.ollama, "chat", fake_chat)
+    _fake_client(monkeypatch, chat)
     llm_module.generate("hi")
     llm_module.generate("hi", schema={"type": "object"})
 
     assert "format" not in seen[0]
     assert seen[1]["format"] == {"type": "object"}
+
+
+def test_transient_errors_are_retried_once(monkeypatch) -> None:
+    import httpx
+
+    import src.llm as llm_module
+
+    for error in (ConnectionError("down"), httpx.ConnectError("refused"), httpx.ReadTimeout("slow")):
+        calls = []
+
+        def chat(model, messages, _error=error, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise _error
+            return _Resp()
+
+        _fake_client(monkeypatch, chat)
+        assert llm_module.generate("hi").text == "ok"
+        assert len(calls) == 2, error
+
+
+def test_non_transient_errors_are_not_retried(monkeypatch) -> None:
+    import ollama
+
+    import src.llm as llm_module
+
+    calls = []
+
+    def chat(model, messages, **kwargs):
+        calls.append(1)
+        raise ollama.ResponseError("model 'nope' not found", 404)
+
+    _fake_client(monkeypatch, chat)
+    with pytest.raises(ollama.ResponseError):
+        llm_module.generate("hi")
+    assert len(calls) == 1
+
+
+def test_a_second_transient_failure_propagates(monkeypatch) -> None:
+    import src.llm as llm_module
+
+    calls = []
+
+    def chat(model, messages, **kwargs):
+        calls.append(1)
+        raise ConnectionError("still down")
+
+    _fake_client(monkeypatch, chat)
+    with pytest.raises(ConnectionError):
+        llm_module.generate("hi")
+    assert len(calls) == 2

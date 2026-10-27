@@ -34,7 +34,8 @@ def test_app_runs_direct_route_without_a_retriever(monkeypatch) -> None:
 
     at = AppTest.from_file(APP_PATH)
     at.run()
-    at.text_input[0].input("Hi there!").run()
+    at.text_input[0].input("Hi there!")
+    at.button[0].click().run()
 
     assert not at.exception
     assert any("Hello!" in md.value for md in at.markdown)
@@ -78,7 +79,43 @@ def test_app_shows_not_found_for_out_of_scope_question(synthetic_retriever) -> N
     at.run()
     # Reranking is on by default in the app; the first run loads the ~1GB
     # cross-encoder, which takes far longer than AppTest's 3s default.
-    at.text_input[0].input("What is the boiling point of mercury on Mars?").run(timeout=180)
+    at.text_input[0].input("What is the boiling point of mercury on Mars?")
+    at.button[0].click().run(timeout=180)
 
     assert not at.exception
     assert any("Not found in the documents." in md.value for md in at.markdown)
+
+
+def test_app_does_not_call_the_llm_again_when_a_widget_changes(monkeypatch) -> None:
+    """Regression: the old app reran the whole pipeline on every widget change."""
+    calls = []
+
+    def fake_generate(prompt: str, system: str | None = None) -> LLMResult:
+        calls.append(1)
+        return LLMResult(text="Hello!", input_tokens=1, output_tokens=1, latency_s=0.01)
+
+    monkeypatch.setattr("src.generator.generate", fake_generate)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.text_input[0].input("Hi there!")
+    at.button[0].click().run()
+    assert len(calls) == 1
+
+    at.checkbox[0].uncheck().run()  # a widget change: must not re-ask
+    assert len(calls) == 1
+    assert any("Hello!" in md.value for md in at.markdown)  # answer still shown
+
+
+def test_app_shows_a_friendly_error_when_ollama_is_down(monkeypatch) -> None:
+    def down(*args, **kwargs):
+        raise ConnectionError("no server")
+
+    monkeypatch.setattr("src.generator.generate", down)
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.text_input[0].input("Hi there!")
+    at.button[0].click().run()
+
+    assert not at.exception
+    assert any("Could not reach Ollama" in e.value for e in at.error)
