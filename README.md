@@ -202,11 +202,16 @@ the reranker now carries more of the off-topic refusals.
 
 ### End-to-end, held-out set (27 in-scope + 12 off-topic), `router` config
 
-| | Old (pypdf + bge-small) | New (Markdown + e5-base) |
-|---|---|---|
-| hit@5 (hybrid+rerank, retrieval only) | 0.93 | 0.89 |
-| Correct in-scope answers | 16 / 27 (59%) | 19 / 27 (70%) |
-| Off-topic questions refused | 11 / 12 | 12 / 12 |
+| | Original (pypdf + bge-small) | Markdown + e5-base | + paper titles |
+|---|---|---|---|
+| hit@5 (retrieval, rerank) | 0.93 | 0.89 | 0.93 |
+| Correct in-scope answers | 16 / 27 (59%) | 19 / 27 (70%) | 22 / 27 (81%) |
+| Off-topic questions refused | 11 / 12 | 12 / 12 | 12 / 12 |
+| Mean latency | ~21 s | 27.6 s | 23.1 s |
+
+The third column was run with the title change (see below). Correctness was graded
+by an AI session, not by hand; on 27 questions one answer is about 4 points, so
+read 16 -> 19 -> 22 as a consistent trend, not a proven 81%.
 
 Dev (49 in-scope), retrieval only: hybrid 0.837, hybrid+rerank 0.898 (old 0.90).
 Mean router latency 21 s on dev, 27.6 s on held-out (CPU shared with other jobs).
