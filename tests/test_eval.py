@@ -120,3 +120,27 @@ def test_write_to_grade_csv(tmp_path, monkeypatch) -> None:
         rows = list(csv.DictReader(f))
     assert rows[0]["question"] == "Q1?"
     assert rows[0]["correct"] == ""
+
+
+def test_bootstrap_ci_brackets_the_mean_and_is_reproducible() -> None:
+    from src.eval import bootstrap_ci
+
+    values = [1.0] * 20 + [0.0] * 7
+    mean, low, high = bootstrap_ci(values)
+    assert mean == 20 / 27
+    assert low < mean < high
+    assert 0.0 <= low and high <= 1.0
+    assert bootstrap_ci(values) == (mean, low, high)  # fixed seed
+    assert bootstrap_ci([1.0] * 10) == (1.0, 1.0, 1.0)  # no variation -> zero-width
+    assert bootstrap_ci([]) == (0.0, 0.0, 0.0)
+
+
+def test_mcnemar_exact_matches_known_binomial_values() -> None:
+    from src.eval import mcnemar_exact, paired_comparison
+
+    assert mcnemar_exact(0, 0) == 1.0
+    assert mcnemar_exact(3, 3) == 1.0  # a perfectly even split is no evidence
+    assert abs(mcnemar_exact(0, 5) - 0.0625) < 1e-12  # 2 * (1/32)
+    assert abs(mcnemar_exact(2, 8) - 0.109375) < 1e-9  # 2 * (1+10+45)/1024
+    result = paired_comparison({1: True, 2: True, 3: False}, {1: True, 2: False, 3: True, 4: True})
+    assert (result["n"], result["only_a"], result["only_b"]) == (3, 1, 1)

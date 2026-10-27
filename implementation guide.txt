@@ -140,6 +140,18 @@ STEP 0 - MEASUREMENT TOOLS FIRST (every later step depends on these)
   Test:   Unit-test the hit@5 function on hand-made hits.
   Effect: Numbers should reproduce the baselines (0.857/0.898 dev,
           0.926/0.926 held-out). If they don't, stop and find out why.
+  STATUS: DONE (src/retrieval_eval.py, tests/test_retrieval_eval.py).
+          Reproduced: dev +rerank 0.898, held-out 0.926/0.926. Dev hybrid
+          reads 0.878 instead of 0.857 because the script now collapses the
+          whole 30-candidate pool to parents before keeping 5 (what the
+          pipeline does); the old scratch script kept only 5 children.
+          Use 0.878 as the dev hybrid baseline from now on.
+          Run: python -m src.retrieval_eval  (~10 min on CPU; writes the
+          gitignored eval/results_retrieval.md).
+          Finding for Step 3.1: top rerank probability on OFF-TOPIC
+          questions reaches 0.995 (dev) / 0.998 (held-out), while the
+          lowest in-scope value is 0.499 (held-out #120). One cut-off on the
+          reranker cannot separate them; combine signals.
 
 0.2 Confidence intervals and paired tests in src/eval.py        CERTAIN
   Do:     Bootstrap 95% CI (resample questions with replacement,
@@ -148,6 +160,13 @@ STEP 0 - MEASUREMENT TOOLS FIRST (every later step depends on these)
           discordant pairs (math.comb, two-sided binomial with p=0.5).
   Effect: Tables show "0.81 [0.67, 0.93]". Tells you which later gains
           are real.
+  STATUS: DONE in src/eval.py: bootstrap_ci(), mcnemar_exact(),
+          paired_comparison(); the hit@5 table in eval reports now has a
+          95% CI column. Correctness tables don't have CIs yet: they need
+          per-question 0/1 grades, which come from the hand-graded CSVs
+          (use paired_comparison on two configs' graded rows).
+          Reading it: on 27 questions the hit@5 interval is about
+          [0.82, 1.00], so a 1-2 question difference is not significant.
   Do not: Use a t-test on 0/1 outcomes, or treat questions as independent
           across two configs (they are paired).
 
