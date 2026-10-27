@@ -49,6 +49,22 @@ def _compact_tables(text: str) -> str:
     return _TABLE_PAD_RE.sub(compact, text)
 
 
+def paper_title(markdown: str, fallback: str) -> str:
+    """The paper's title: the first Markdown heading (true for all 26 corpus
+    papers), else `fallback` (the file stem)."""
+    match = re.search(r"^#{1,6}[ ]+(.+?)[ ]*$", markdown, re.MULTILINE)
+    return match.group(1).strip() if match else fallback
+
+
+def contextualize(chunk: dict) -> str:
+    """Chunk text with its paper title on top. Used for embedding, BM25 and the
+    LLM prompt, so a passage that says only "the benchmark" still carries the
+    name of the paper it came from (the stored `text` stays the raw span)."""
+    if not chunk.get("title"):
+        return chunk["text"]
+    return chunk["title"] + "\n" + chunk["text"]
+
+
 def load_markdown(folder: Path | str = MD_DIR) -> list[dict]:
     """Read every .md file in `folder` into one dict per page.
 
@@ -61,12 +77,14 @@ def load_markdown(folder: Path | str = MD_DIR) -> list[dict]:
     """
     pages: list[dict] = []
     for md_path in sorted(Path(folder).glob("*.md")):
-        parts = _PAGE_RE.split(md_path.read_text(encoding="utf-8"))
+        markdown = md_path.read_text(encoding="utf-8")
+        title = paper_title(markdown, md_path.stem)
+        parts = _PAGE_RE.split(markdown)
         # split() with one capture group -> [preamble, "1", body1, "2", body2, ...]
         for page_no, body in zip(parts[1::2], parts[2::2]):
             images = _IMAGE_RE.findall(body)
             text = _compact_tables(_COMMENT_RE.sub("", _IMAGE_RE.sub("", body)))
-            page = {"source": f"{md_path.stem}.pdf", "page": int(page_no), "text": text.strip()}
+            page = {"source": f"{md_path.stem}.pdf", "page": int(page_no), "text": text.strip(), "title": title}
             if images:
                 page["images"] = images
             pages.append(page)
@@ -227,6 +245,8 @@ def chunk_pages(
 
         for text in page_chunks:
             chunk = {"id": len(chunks), "text": text, "source": page["source"], "page": page["page"]}
+            if page.get("title"):
+                chunk["title"] = page["title"]
             if page.get("images"):
                 chunk["images"] = page["images"]
             chunks.append(chunk)
@@ -246,7 +266,7 @@ def make_children(parents: list[dict]) -> list[dict]:
     """
     children: list[dict] = []
     for parent in parents:
-        page = {"source": parent["source"], "page": parent["page"], "text": parent["text"]}
+        page = {"source": parent["source"], "page": parent["page"], "text": parent["text"], "title": parent.get("title")}
         for child in chunk_pages([page], chunk_tokens=CHILD_TOKENS, chunk_overlap=CHILD_OVERLAP):
             children.append({**child, "id": len(children), "parent_id": parent["id"]})
     return children

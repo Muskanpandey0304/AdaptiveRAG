@@ -219,6 +219,14 @@ retrieval: in 5 of 8 wrong answers the gold page was retrieved (two said
 0.499 against the 0.5 minimum, and one was a retrieval miss. Dev answers were
 not graded.
 
+**Paper title on every chunk.** Each chunk now stores its paper's title (the first
+heading of its Markdown), and the title is prepended for embedding, BM25 and the
+LLM context; the reranker input and the stored text are unchanged. Retrieval-only
+hit@5 with titles: dev hybrid 0.837 -> 0.857, held-out hybrid and hybrid+rerank
+0.889 -> 0.926 (one question), dev hybrid+rerank unchanged at 0.898. The gain is
+small and within noise on 27 questions; the effect on answer correctness has not
+been measured. The thresholds still fit the new score distributions.
+
 Other caveats: bge-base did not finish and is not compared; bge-large and
 Qwen3-Embedding-0.6B were skipped on purpose (hours of CPU embedding for an
 uncertain gain). The older sections below were measured on the pypdf chunks.

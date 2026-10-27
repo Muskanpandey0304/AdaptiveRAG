@@ -14,6 +14,7 @@ from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
 from src.config import DOC_PREFIX, EMBED_MODEL
+from src.ingest import contextualize
 
 CHUNKS_PATH = Path("data/index/chunks.json")
 FAISS_PATH = Path("data/index/faiss.index")
@@ -45,7 +46,7 @@ def build_vector_index(chunks: list[dict]) -> faiss.Index:
     similarity computation.
     """
     model = SentenceTransformer(EMBED_MODEL)
-    texts = [DOC_PREFIX + chunk["text"] for chunk in chunks]
+    texts = [DOC_PREFIX + contextualize(chunk) for chunk in chunks]
     embeddings = model.encode(texts, normalize_embeddings=True, batch_size=32, show_progress_bar=True)
     embeddings = np.asarray(embeddings, dtype="float32")
 
@@ -56,7 +57,7 @@ def build_vector_index(chunks: list[dict]) -> faiss.Index:
 
 def build_bm25_index(chunks: list[dict]) -> BM25Okapi:
     """Build a BM25 index over tokenized chunk texts."""
-    tokenized_chunks = [tokenize(chunk["text"]) for chunk in chunks]
+    tokenized_chunks = [tokenize(contextualize(chunk)) for chunk in chunks]
     return BM25Okapi(tokenized_chunks)
 
 

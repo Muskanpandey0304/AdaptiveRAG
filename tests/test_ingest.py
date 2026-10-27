@@ -134,3 +134,21 @@ def test_load_markdown_strips_table_padding(tmp_path) -> None:
         encoding="utf-8",
     )
     assert load_markdown(tmp_path)[0]["text"] == "| Model | Acc |\n|---|---|\n| A | 0.9 |"
+
+
+def test_paper_title_is_first_heading_with_stem_fallback() -> None:
+    from src.ingest import paper_title
+
+    assert paper_title("<!-- page: 1 -->\n\n## My Paper: A Study\n\n## Abstract\n", "x") == "My Paper: A Study"
+    assert paper_title("no headings here", "stem") == "stem"
+
+
+def test_chunks_and_children_carry_the_paper_title_and_contextualize_uses_it(tmp_path) -> None:
+    from src.ingest import contextualize, make_children
+
+    (tmp_path / "p.md").write_text("<!-- page: 1 -->\n\n## The Title\n\nSome body text here.\n", encoding="utf-8")
+    parents = chunk_pages(load_markdown(tmp_path))
+    children = make_children(parents)
+    assert parents[0]["title"] == children[0]["title"] == "The Title"
+    assert contextualize(children[0]).startswith("The Title\n")
+    assert contextualize({"text": "bare"}) == "bare"  # no title -> unchanged

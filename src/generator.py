@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from src import config
+from src.ingest import contextualize
 from src.llm import LLMResult, generate
 from src.retrievers import Hit
 
@@ -90,7 +91,7 @@ class Answer:
 
 def _build_context_prompt(query: str, hits: list[Hit]) -> str:
     """Render `hits` as numbered context blocks [1], [2], ... for the LLM."""
-    blocks = [f"[{i + 1}] {hit.chunk['text']}" for i, hit in enumerate(hits)]
+    blocks = [f"[{i + 1}] {contextualize(hit.chunk)}" for i, hit in enumerate(hits)]
     context = "\n\n".join(blocks)
     return f"Context:\n{context}\n\nQuestion: {query}"
 
