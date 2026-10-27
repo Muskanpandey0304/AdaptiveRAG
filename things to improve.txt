@@ -1,0 +1,327 @@
+AdaptiveRAG - things to improve
+Senior-engineer review, 2026-10-27, after the Docling/e5/paper-title changes.
+
+WHERE THE PROJECT STANDS
+------------------------
+Held-out set (27 in-scope + 12 off-topic questions):
+  - retrieval hit@5 0.93
+  - 22/27 correct with llama3.2:3b, 24/27 with llama3.1:8b
+  - 12/12 off-topic questions refused
+  - about 23 s per answer on CPU (3B)
+Strengths worth keeping: a dev/held-out split, A/B comparisons, an honest
+DECISIONS.md, every number traceable to a script, no RAG framework.
+
+The ranking below follows one rule: fix what makes the numbers untrustworthy
+first, then what fails real users, then speed and polish. Each item says what
+to do, why it matters, how to measure it, and the rough effort.
+
+
+==========================================================================
+TIER 1 - MAKE THE RESULTS DEFENSIBLE (do these first)
+==========================================================================
+
+1. Grade answers yourself, then measure how far you can trust the auto-grader
+   What:   Hand-grade ~40 answers (dev + held-out, mixed configs). Compare
+           with the AI grading and the regex answer keys, and report the
+           agreement (percent and Cohen's kappa).
+   Why:    Every correctness number in the README was graded by an AI
+           session. That is the first thing a reviewer will question.
+   Measure: Agreement table in the README. If kappa is >= 0.8, the
+           automatic grading can be trusted for later runs.
+   Effort: 1 hour of your time.
+
+2. Add confidence intervals and paired significance tests
+   What:   Add bootstrap 95% CIs on hit@5 and correctness, and McNemar's
+           test when comparing two configs on the same questions, to
+           src/eval.py.
+   Why:    27 questions means one answer is ~4 points. "16 -> 19 -> 22"
+           and "22 -> 24 with 8B" may be real or may be noise. Right now
+           the README can only say "trend".
+   Measure: Every results table shows "0.81 [0.67, 0.93]"-style intervals.
+   Effort: 1-2 hours.
+
+3. Grow the evaluation sets and add hard negatives
+   What:   Take the held-out set from 27 to 60+ in-scope questions. Add
+           ~20 in-domain questions the corpus cannot answer, for example
+           "What did GPT-5 score on MMLU?" or "Which benchmark does the
+           MMLU-Pro paper say replaced HELM?".
+   Why:    Today the off-topic questions are easy ("capital of France").
+           The real risk is plausible, on-topic questions that have no
+           answer in the papers, and the eval never tests that.
+   Measure: A separate "unanswerable in-domain" refusal rate.
+   Effort: 2-3 hours (the questions must be checked against the PDFs, not
+           invented).
+
+4. Freeze one reproducible headline run
+   What:   One command (e.g. `python -m src.eval --release`) that rebuilds
+           nothing, records the git commit, index meta.json, model names
+           and thresholds, and writes a dated results file.
+   Why:    Results now come from several separate runs and sessions. A
+           reviewer should be able to reproduce the headline table exactly.
+   Effort: 1 hour.
+
+
+==========================================================================
+TIER 2 - FIX WHAT FAILS FOR REAL USERS
+==========================================================================
+
+5. Replace the four hand-set thresholds with one calibrated answerability model
+   What:   Train a logistic regression on features you already compute:
+           rerank probability, best-chunk cosine, centroid cosine,
+           normalized BM25 score, route, and question type. Train on dev,
+           pick the cut-off from a precision/recall curve, and check it on
+           held-out.
+   Why:    Both remaining held-out refusals (#107, #120) come from the
+           gates. #120 scored 0.499 against a 0.5 reranker minimum. With
+           e5, in-scope and off-topic centroid scores overlap, so that gate
+           is weak. Four magic numbers re-tuned after every model change do
+           not scale.
+   Measure: Answer rate on in-scope vs false-answer rate on off-topic and
+           unanswerable questions (item 3), before and after.
+   Effort: 2-3 hours.
+
+6. Make the generator stop saying NOT_FOUND when the answer is in context
+   What:   For #107-type cases (gold page retrieved, model refuses), try
+           (a) asking the model to quote the supporting sentence first and
+           then answer, and (b) a second pass that runs only when the first
+           reply is a refusal but rerank confidence is high.
+   Why:    In the last held-out run, 3 of the 5 wrong answers had the right
+           page in the context.
+   Measure: Run src/eval_generation.py on cached retrieval, so only the
+           generator differs.
+   Effort: 2 hours.
+
+7. Split two-part questions
+   What:   Detect "X, and Y?" or "how many ... and what ..." questions,
+           retrieve for each part, merge the hits, and answer once.
+   Why:    A small model can answer one half of a two-part question and
+           drop the other. Check how often this happens on the graded runs
+           before building it: on the held-out set the current system
+           answered #106, #113, #116 and #117 fully, so the gain may be small.
+   Effort: 2 hours.
+
+8. Decode formulas (needs GPU torch)
+   What:   Install a CUDA build of torch for the GTX 1650 and re-convert
+           with formula decoding on (it turns on automatically when a GPU
+           is found).
+   Why:    Formulas are currently missing from the Markdown, so formula
+           questions cannot be answered. A GPU also speeds up embedding and
+           reranking.
+   Effort: 1 hour of setup plus a re-conversion.
+
+9. Make figures searchable
+   What:   Figures are already saved as PNGs and linked from chunks. Caption
+           them with a small vision model (e.g. through Ollama) and index the
+           caption text as extra chunks pointing at the same page.
+   Why:    Several benchmark results exist only in plots.
+   Effort: Half a day; measure with a few figure-only questions.
+
+
+==========================================================================
+TIER 3 - ENGINEERING QUALITY
+==========================================================================
+
+10. LLM call robustness (src/llm.py)
+    - It retries once on ANY exception, including "model not found", and
+      the measured latency includes the failed attempt. Retry only on
+      connection or timeout errors and time each attempt separately.
+    - There is no request timeout, so a hung Ollama call blocks the eval
+      forever. Pass a timeout to the client.
+
+11. Avoid repeated work per query
+    - The hybrid path embeds the same query twice (vector_search and
+      centroid_similarity). Encode it once and pass the vector along.
+    - The retriever and models load on the first question. Warm them at app
+      start so the first user does not wait.
+
+12. Streamlit app (app.py)
+    - Every widget change reruns the full pipeline, so toggling the rerank
+      box calls the LLM again. Use st.form plus st.session_state, or
+      st.cache_data keyed on (query, settings).
+    - Stream tokens as they arrive instead of waiting 20-40 s for nothing.
+    - Show the paper title and the extracted figures for each citation;
+      chunks already carry `title` and `images`.
+    - Add st.spinner and error messages for "Ollama not running" and
+      "index not built".
+
+13. Safer index storage
+    - bm25.pkl is loaded with pickle, which is fragile across library
+      versions and unsafe if the file ever comes from elsewhere. Rebuild
+      BM25 from chunks.json at load time; it takes about a second.
+    - meta.json records the embedding model. Also record the chunker
+      settings and a hash of data/md, and refuse to load a stale index.
+
+14. One settings object instead of module globals
+    - Some settings are read at import (LLM_MODEL, TOP_K) and others at call
+      time (config.PROMPT_VERSION). That is why the generation harness
+      cannot switch models between variants.
+    - Pass a frozen Settings dataclass into ask(). A/B runs and tests become
+      simpler and less surprising.
+
+15. Tooling
+    - Add pyproject.toml, ruff (lint + format), and mypy on src/.
+    - Add a GitHub Actions workflow that runs the fast tests. Mark the tests
+      that download models with @pytest.mark.slow and skip them in CI.
+    - Add a tiny fixture corpus (2-3 small public PDFs or Markdown files) so
+      an end-to-end test runs without the real 26 papers.
+
+
+==========================================================================
+TIER 4 - BIGGER UPGRADES (if you want to go further)
+==========================================================================
+
+16. Generator choice as a measured trade-off
+    The 8B model gave +2 answers for ~1.8x latency. Add an API model (one
+    branch in src/llm.py) as an upper bound. A table of "3B / 8B / API:
+    accuracy, latency, cost" is a strong interview artifact.
+
+17. Learned router (only with real data)
+    Log real user queries (logs/queries.jsonl already exists), label ~200
+    of them, then train a small classifier on the embeddings. Do not train
+    it on invented queries. Until then the regex router plus keyword-route
+    escalation is fine.
+
+18. Query rewriting / HyDE for vague questions
+    Rewrite or expand only when the first retrieval is low-confidence, and
+    keep the change only if hit@5 improves on dev and held-out.
+
+19. Serve it
+    Put a small FastAPI endpoint in front of ask() and run it in a Docker
+    container with Ollama. A live demo link turns the project from code
+    into a product.
+
+
+==========================================================================
+WHAT NOT TO DO
+==========================================================================
+- Don't tune thresholds or prompts on the held-out set. Tune on dev and
+  check once on held-out. When held-out has been used for a decision,
+  write that down in DECISIONS.md.
+- Don't add LangChain/LlamaIndex. "Built from scratch and measured" is
+  this project's main selling point.
+- Don't chase bigger embedding models (bge-large, Qwen3) on CPU. The
+  remaining errors are in the gates and the generator, not retrieval.
+
+
+SUGGESTED ORDER
+---------------
+Week 1: 1, 2, 5     (trustworthy numbers + fixes the real failures)
+Week 2: 3, 6, 10-12 (harder eval set, generator fixes, robustness, UI)
+Later:  13-15, then 16-19 as interest and hardware allow.
+
+
+==========================================================================
+THE PLAN - SMALL, HIGH-CONFIDENCE UPGRADES (methods, models, algorithms)
+==========================================================================
+Only changes I am confident will help, each with the reason I am confident.
+"Certain" = cannot make answers worse (robustness or speed).
+"Likely"  = backed by evidence from this project; still measure it.
+Measure every "Likely" item on dev first, then check once on held-out.
+
+STEP 1 - Safety and speed fixes (certain, ~2 hours total)
+---------------------------------------------------------
+1.1 Pin the LLM context window (src/llm.py)
+    Change:  Pass options num_ctx=8192 to Ollama.
+    Why:     Ollama silently cuts prompts longer than its window. The query
+             log has 76 older calls with exactly 2,050 input tokens, the
+             signature of a 2,048-token cut. The model never saw part of its
+             context there, and some earlier README numbers may come from
+             those runs. Recent runs (up to 4,330 tokens) look uncut, but
+             the default depends on the Ollama version. Pinning it makes
+             runs reproducible.
+    Check:   No tokens_in value clusters at 2,048/2,050 or 4,096 in
+             logs/queries.jsonl.
+
+1.2 Keep the model loaded (src/llm.py)
+    Change:  Pass keep_alive="30m" so Ollama doesn't unload the model
+             between questions.
+    Why:     Reloading a 2-5 GB model adds seconds to the first answer after
+             an idle gap. Speed only; answers are unaffected.
+
+1.3 Retry only real transient errors, and add a timeout (src/llm.py)
+    Change:  Retry once on connection or timeout errors only; give the
+             client a timeout (e.g. 180 s); time each attempt separately.
+    Why:     Today any error is retried (even "model not found") and a hung
+             call blocks an eval forever.
+
+1.4 Embed each query once (src/retrievers.py)
+    Change:  vector_search and centroid_similarity each encode the same
+             query. Encode once per query and reuse the vector (a small LRU
+             cache keyed on the query string is enough).
+    Why:     Pure speed. e5-base is the slowest part of retrieval on CPU.
+
+1.5 Stop re-running the pipeline on every UI click (app.py)
+    Change:  Wrap the inputs in st.form and cache the Result in
+             st.session_state keyed on (query, settings).
+    Why:     Toggling the checkbox calls the LLM again (20-40 s on CPU).
+
+STEP 2 - Answer-quality fixes (likely, ~half a day)
+---------------------------------------------------
+2.1 Fix the "[n]" citation placeholder in the v1 prompt (src/generator.py)
+    Change:  "Cite every claim with the matching [n]" ->
+             "Cite every claim with its block number, e.g. [2]".
+    Why:     The 3B model copies "[n]" literally (7 of 46 answers in an
+             earlier run; several in the latest held-out run), and those
+             answers lose their citations. The 8B model never does it, so
+             this is a prompt clarity problem. Check refusals didn't rise
+             (src/eval_generation.py on cached retrieval isolates this).
+
+2.2 Give the reranker the paper title too (src/retrievers.py, rerank)
+    Change:  Score (query, contextualize(chunk)) instead of
+             (query, chunk["text"]).
+    Why:     Adding the title to embedding and BM25 raised held-out hit@5
+             from 0.889 to 0.926, and wrong-paper answers are a documented
+             failure. The reranker is the last ranking step and is still
+             title-blind.
+    Careful: Rerank scores will shift. Re-check RERANK_MIN_PROB on dev (or
+             do this together with plan step 3.1).
+
+2.3 Quote-then-answer when the context has the answer (src/generator.py)
+    Change:  Ask the model for the supporting sentence first, then the
+             answer. Or, cheaper: only when the first reply is a refusal and
+             rerank confidence is high, retry once with "the answer is in
+             block [k]; quote it, then answer".
+    Why:     In the last held-out run, 3 of 5 wrong answers had the gold page
+             in the context; the model refused or took the wrong fact.
+             Quoting first is a standard way to anchor small models.
+
+STEP 3 - The algorithm upgrade with the biggest payoff (likely, ~3 hours)
+-------------------------------------------------------------------------
+3.1 Calibrated answerability gate (src/pipeline.py + new src/gate.py)
+    Change:  Replace the four separate thresholds (BM25_MIN_SCORE,
+             VECTOR_MIN_SIM, RERANK_MIN_PROB, CENTROID_MIN_SIM) with one
+             logistic regression over those same scores plus the route.
+             Train on dev, choose the cut-off from the precision/recall
+             curve, report on held-out.
+    Why:     The remaining wrongful refusals come from the gates (#120 at
+             0.499 vs 0.5), and the centroid gate overlaps with e5. One
+             learned boundary over all signals is more stable than four
+             cut-offs that need re-tuning after every model change.
+    Needs:   Plan item 3 (hard negatives) so the model learns what
+             "on-topic but unanswerable" looks like.
+
+STEP 4 - Model choices (measured, keep configurable)
+----------------------------------------------------
+4.1 Generator: keep llama3.2:3b as default, llama3.1:8b as the accuracy
+    option. Measured: 24/27 vs 22/27, latency 42 s vs 23 s. With a GPU,
+    the 8B model becomes the obvious default.
+4.2 Embedding: keep e5-base-v2. Measured best of the CPU-friendly models
+    (held-out hybrid hit@5 0.889 vs bge-small 0.815 before titles).
+    bge-base is the only other model worth a run.
+4.3 Reranker: keep bge-reranker-base. Larger rerankers are slow on CPU,
+    and retrieval is no longer the bottleneck.
+
+DELIBERATELY LEFT OUT (not confident they would help here)
+----------------------------------------------------------
+- HyDE / query rewriting: adds an LLM call per question. Retrieval
+  already finds the gold page ~93% of the time.
+- Bigger embedding models or rerankers: hours of CPU for the part that
+  already works.
+- Changing RRF's k, chunk sizes, or BM25 tokenization: no evidence they are
+  causing errors; tuning them risks overfitting 27 questions.
+- Learned router: no real labelled routing data yet (see item 17).
+
+ORDER
+-----
+Step 1 (all of it) -> 2.1 -> 2.2 + 3.1 together -> 2.3 -> re-run dev +
+held-out once and update the README table.

@@ -1,0 +1,378 @@
+AdaptiveRAG - IMPLEMENTATION GUIDE FOR THE NEXT ROUND OF IMPROVEMENTS
+=======================================================================
+Written 2026-10-27. Audience: any engineer or AI coding agent picking this
+project up later. Read sections 1-3 before touching code; each step in
+section 4 is self-contained after that.
+
+"things to improve.txt" is the short ranked review. This file is the how-to:
+for every change it says what to do, where, how to test it, how to measure
+it, what effect to expect, what can go wrong, and what NOT to do.
+
+
+-----------------------------------------------------------------------
+1. PROJECT SNAPSHOT (what exists today)
+-----------------------------------------------------------------------
+Pipeline (all in src/):
+  convert.py    PDF -> Markdown with Docling (data/md/, incremental by file
+                hash). OCR on image regions only; formulas decoded only with
+                a CUDA GPU.
+  ingest.py     Markdown -> parent chunks (~600 tokens, one page each) ->
+                child chunks (~120 tokens). Tables/formulas never split.
+                Each chunk stores its paper `title`; contextualize(chunk)
+                returns title + text.
+  indexer.py    FAISS (e5-base-v2 embeddings of contextualize(chunk)),
+                BM25 (same text), corpus centroid, meta.json (records the
+                embedding model).
+  retrievers.py vector / BM25 / hybrid (RRF) search, cross-encoder rerank
+                (bge-reranker-base, scores raw child text), child -> parent.
+  router.py     regex router: direct / keyword / hybrid.
+  pipeline.py   ask(): route -> retrieve -> confidence gates -> generate ->
+                log to logs/queries.jsonl.
+  generator.py  prompt versions (default "v1r"), citation parsing,
+                NOT_FOUND handling.
+  llm.py        Ollama wrapper (default model in .env: llama3.2:3b).
+  eval.py             full end-to-end eval over a question file.
+  eval_generation.py  generator-only eval on cached retrieval; exact answers
+                      auto-scored with eval/answer_patterns.json.
+  embed_bench.py      retrieval-only comparison of embedding models.
+
+Confidence gates (src/config.py), all tuned on the dev set:
+  BM25_MIN_SCORE 15.0 | VECTOR_MIN_SIM 0.83 | RERANK_MIN_PROB 0.5 |
+  CENTROID_MIN_SIM 0.82   (the two cosine ones are specific to e5-base-v2)
+
+BASELINES TO BEAT (current committed system, router config):
+  Held-out (27 in-scope + 12 off-topic):
+    retrieval hit@5 (hybrid+rerank)     0.926
+    correct in-scope, llama3.2:3b       22/27   (AI-graded, not by hand)
+    correct in-scope, llama3.1:8b       24/27   (AI-graded)
+    exact answers, auto-scored keys     15/17   (both models)
+    off-topic refused                   12/12
+    latency mean / p95 (3B)             23.1 s / 38.1 s
+  Dev (49 in-scope + 6 off-topic):
+    retrieval hit@5 hybrid / +rerank    0.857 / 0.898
+    correctness                         not yet graded for this system
+  Known failing held-out questions: #107 and #120 (wrongly refused),
+  #125 (wrong fact). #120's rerank score is 0.499 vs the 0.5 gate.
+
+
+-----------------------------------------------------------------------
+2. GROUND RULES
+-----------------------------------------------------------------------
+DO
+  - Tune on the dev set (eval/questions.json). Check on held-out
+    (eval/heldout_questions.json) ONCE at the end of a step. If held-out
+    ever influences a decision, write that in DECISIONS.md.
+  - Change one thing per step, measure it, then commit it. Mixed changes
+    make results unexplainable.
+  - Add one line to DECISIONS.md per decision: the choice, the reason, the
+    numbers.
+  - Label every correctness number with who graded it (hand, AI session,
+    or auto regex keys).
+  - Keep every new behaviour switchable through src/config.py (env var
+    override) so old results stay reproducible.
+  - Back up eval outputs before re-running: eval/results_*.md and
+    eval/to_grade*.csv are OVERWRITTEN by the next run and are gitignored.
+
+DO NOT
+  - Do not add LangChain / LlamaIndex / Haystack or scikit-learn. The
+    project's rule is "built from scratch" with the libraries in
+    requirements.txt; small algorithms (logistic regression, bootstrap) are
+    written with numpy.
+  - Do not invent questions, answers or numbers. New eval questions must
+    be checked against the actual PDF text.
+  - Do not lower a threshold just to rescue one held-out question.
+  - Do not report a difference of 1-3 answers on 27 questions as an
+    improvement without a confidence interval (one answer = ~4 points).
+
+ENVIRONMENT GOTCHAS (each of these has already cost time)
+  - Windows; use venv\Scripts\python.exe (Python 3.10). torch is CPU-only.
+  - Source files use CRLF line endings. Edit with an editor/edit tool;
+    shell heredocs and sed have mangled "\n" and "\t" escapes before.
+  - LLM_MODEL is read once at import (src/llm.py). To switch models, set
+    the env var before the process starts.
+  - After ANY change to chunking, titles or the embedding model:
+    run `python -m src.ingest` then `python -m src.indexer` (about 45 min
+    on CPU), and delete eval/generation/hits_*.pkl (cached retrieval).
+  - The retriever refuses to load an index built with a different
+    EMBED_MODEL (meta.json). That is intentional.
+  - Changing the embedding model invalidates VECTOR_MIN_SIM and
+    CENTROID_MIN_SIM; changing reranker input invalidates RERANK_MIN_PROB.
+  - Full test suite: `pytest tests --ignore=tests/test_llm.py` (~2.5 min,
+    loads models). The 3B eval on held-out takes ~15-20 min, dev ~25 min.
+
+
+-----------------------------------------------------------------------
+3. THE LOOP TO FOLLOW FOR EVERY STEP
+-----------------------------------------------------------------------
+  1. Read the step. Note its baseline numbers.
+  2. Make the code change behind a config switch where the step says so.
+  3. Add or update unit tests (pure logic, mocked LLM) and run them.
+  4. Measure on DEV with the command the step names. Compare to baseline.
+  5. If it helps or is neutral and the step is "certain": keep it.
+     If it is "likely" and dev got worse: revert, and record why in
+     DECISIONS.md (negative results are worth keeping).
+  6. Run held-out once. Record both numbers.
+  7. Update README (results table) and DECISIONS.md; commit with the
+     numbers in the message.
+
+
+-----------------------------------------------------------------------
+4. THE STEPS
+-----------------------------------------------------------------------
+Confidence labels:
+  CERTAIN = robustness or speed; cannot make answers worse.
+  LIKELY  = backed by evidence from this project; must still be measured.
+
+=======================================================================
+STEP 0 - MEASUREMENT TOOLS FIRST (every later step depends on these)
+=======================================================================
+0.1 Commit a retrieval-only eval script                         CERTAIN
+  Why:    Steps 2.2 and 3.1 must be judged on retrieval hit@5 with and
+          without rerank. That measurement only exists as a scratch
+          script today.
+  Do:     Add src/retrieval_eval.py: for each in-scope question run
+          hybrid_search(q, RERANK_POOL_K); score hit@5 of
+          to_parents(pool[:5]) and of to_parents(rerank(q, pool, 5)),
+          overall and per question type, for dev and held-out. Also print
+          the distributions (min/p10/median/max) of the top rerank score,
+          best-chunk cosine and centroid cosine, split in-scope vs
+          off-topic. These are what thresholds are chosen from.
+  Test:   Unit-test the hit@5 function on hand-made hits.
+  Effect: Numbers should reproduce the baselines (0.857/0.898 dev,
+          0.926/0.926 held-out). If they don't, stop and find out why.
+
+0.2 Confidence intervals and paired tests in src/eval.py        CERTAIN
+  Do:     Bootstrap 95% CI (resample questions with replacement,
+          2,000 rounds, numpy) for hit@5 and graded correctness. For two
+          configs on the same questions, McNemar exact test on the
+          discordant pairs (math.comb, two-sided binomial with p=0.5).
+  Effect: Tables show "0.81 [0.67, 0.93]". Tells you which later gains
+          are real.
+  Do not: Use a t-test on 0/1 outcomes, or treat questions as independent
+          across two configs (they are paired).
+
+0.3 Hand-grade a sample (needs the project owner, ~1 hour)      CERTAIN
+  Do:     Owner grades ~40 answers (mix of dev/held-out, 3B/8B). Compute
+          agreement (percent and Cohen's kappa) with the AI grades and with
+          the regex keys (eval/answer_patterns.json). Known disagreements:
+          #102 (keys demand "90-96", answers give 0.924/0.962) and #112.
+  Effect: If kappa >= 0.8, later steps can use AI/regex grading.
+
+=======================================================================
+STEP 1 - SAFETY AND SPEED (all CERTAIN, ~2 hours)
+=======================================================================
+1.1 Pin Ollama's context window
+  Where:  src/llm.py, the `options` dict passed to ollama.chat; new
+          config LLM_NUM_CTX = 8192 (env override).
+  Do:     options = {"num_predict": ..., "temperature": ...,
+                     "num_ctx": LLM_NUM_CTX}
+  Why:    Ollama silently drops the start of a prompt that exceeds its
+          window. logs/queries.jsonl has 76 older calls with exactly 2,050
+          input tokens, the signature of a 2,048-token cut. Recent runs
+          (prompts up to 4,330 tokens) look uncut, but the default depends
+          on the Ollama version. Pinning makes runs reproducible.
+  Test:   Mock ollama.chat; assert options["num_ctx"] == LLM_NUM_CTX.
+  Check:  After a run, no tokens_in values cluster at 2,048-2,050 or
+          4,096 in logs/queries.jsonl.
+  Effect: No change in answers if nothing was being cut; fixes
+          missing-context errors if something was.
+  Cost:   About 1 GB more RAM for the KV cache, and Ollama reloads the
+          model once when num_ctx changes.
+  Do not: Set it to 128k "to be safe"; RAM grows with it.
+
+1.2 Keep the model loaded between calls
+  Where:  src/llm.py, ollama.chat(..., keep_alive=LLM_KEEP_ALIVE); config
+          default "10m".
+  Effect: Removes model reload delay after idle gaps.
+  Cost:   Model stays in RAM (~2 GB for 3B, ~5 GB for 8B) while idle.
+          On an 8-16 GB laptop with other apps open, keep it short.
+
+1.3 Retry only transient errors; add a timeout
+  Where:  src/llm.py generate().
+  Do:     Build one client `ollama.Client(timeout=LLM_TIMEOUT_S)` (config,
+          180 s). Retry once only on connection/timeout errors (the
+          client is httpx-based: httpx.ConnectError, httpx.TimeoutException;
+          verify the exact exception types against the installed ollama
+          version). Re-raise anything else immediately (e.g. model not
+          found). Measure latency of the final attempt only.
+  Test:   Mock the client: a ConnectError then success -> one retry;
+          a ResponseError -> no retry, raised.
+  Effect: A hung call can't freeze an eval. Errors surface instead of
+          doubling. Latency numbers stop including failed attempts.
+
+1.4 Embed each query once
+  Where:  src/retrievers.py. vector_search() and centroid_similarity()
+          both call embed_model.encode() on the same query.
+  Do:     Add Retriever._query_vector(query) that encodes once and keeps
+          a small dict cache (e.g. last 256 queries); use it in both.
+  Test:   Patch embed_model.encode with a counter; one hybrid query ->
+          one encode call.
+  Effect: Saves one e5 forward pass per question (tens of ms on CPU).
+          Small next to the LLM's 20 s, but free.
+
+1.5 Stop the UI re-running the LLM on every click
+  Where:  app.py.
+  Do:     Put the question box and the rerank checkbox in st.form with a
+          submit button. Store the Result in st.session_state keyed on
+          (query, use_rerank) and only call ask() when that key changes.
+          Add st.spinner("Answering...") around ask(). Catch connection
+          errors and show "Is Ollama running?" instead of a stack trace.
+  Effect: Toggling a widget no longer costs 20-40 s.
+  Do not: Use st.cache_data on ask() with no key on settings; it would
+          serve stale answers after a config change.
+
+Commit Step 1 as one commit; README untouched except the run notes.
+
+=======================================================================
+STEP 2 - ANSWER QUALITY (LIKELY, measure each one separately)
+=======================================================================
+Measure all of Step 2 with the generator-only harness, so retrieval is
+identical between before and after:
+    python -m src.eval_generation dev A_v1r_full      (before)
+    python -m src.eval_generation dev <new variant>   (after)
+It prints exact_correct, refusals, literal_n_citations and latency.
+
+2.1 Clarify the citation instruction
+  Where:  src/generator.py, _CONTEXT_SYSTEM_PROMPT (used by v1/v1r).
+  Today:  "Cite every claim you make with the matching [n]."
+  Change: Add a NEW prompt version (e.g. "v1c") identical to v1r except
+          that one sentence, e.g.:
+          "After each claim, write the number of the supporting context
+           block in square brackets, e.g. [2]."
+          Keep the NOT_FOUND sentence word-for-word identical.
+          Register it in generator._generate_text, add a VARIANTS entry
+          in src/eval_generation.py, switch PROMPT_VERSION's default only
+          after it wins.
+  Why:    The 3B model copies "[n]" literally (7 of 46 answers in an
+          earlier dev run; 6 answers in the latest held-out run), and
+          those answers lose their parsed citations. The 8B model never
+          does it, so the instruction is ambiguous for small models.
+  Expect: literal_n_citations -> ~0; exact_correct unchanged.
+  Risk:   Rewording a prompt can shift refusal behaviour. The fuller
+          rewrite "v2" did exactly that (it answered off-topic questions
+          from corpus text), which is why only ONE sentence changes here.
+  Reject if: refusals on dev in-scope rise, or off-topic refusals in a
+          full eval drop below 12/12 (held-out) / the dev baseline.
+
+2.2 Give the reranker the paper title
+  Where:  src/retrievers.py Retriever.rerank():
+          pairs = [(query, hit.chunk["text"]) ...]
+          -> pairs = [(query, contextualize(hit.chunk)) ...]
+          (import contextualize from src.ingest). Make it switchable:
+          config RERANK_WITH_TITLE (default False until measured).
+  Why:    Adding titles to embedding and BM25 raised held-out hit@5
+          0.889 -> 0.926. The reranker is the last ranking step and is
+          still title-blind; wrong-paper answers (MMLU-Pro for MMLU) are a
+          documented failure.
+  Measure: src/retrieval_eval.py (Step 0.1) dev hit@5 with rerank, both
+          settings. Then look at the rerank-score distributions.
+  Side effect (IMPORTANT): rerank probabilities shift, so
+          RERANK_MIN_PROB = 0.5 may no longer separate in-scope from
+          off-topic. Re-choose it on dev from the printed distributions,
+          or do 2.2 together with Step 3.1, which replaces it.
+  Also:   Delete eval/generation/hits_*.pkl afterwards.
+  Reject if: dev hit@5 with rerank drops.
+
+2.3 Second chance when the model refuses but retrieval is confident
+  Where:  src/pipeline.py, after _generate_answer() in _run_hybrid().
+  Do:     If the answer is NOT_FOUND AND confidence (top rerank prob) >=
+          QUOTE_RETRY_MIN_PROB (config, start at 0.9), call the LLM once
+          more with a quote-first instruction: "First copy the sentence
+          from the context that answers the question, then answer in one
+          sentence with its block number. If no sentence answers it,
+          reply NOT_FOUND." Switchable with QUOTE_RETRY (default off).
+  Why:    In the latest held-out run, 3 of 5 wrong answers had the gold
+          page retrieved; the model refused or picked the wrong fact.
+          Making a small model quote its evidence first is a standard way
+          to anchor it.
+  Expect: Fewer in-scope refusals (#107-type). Extra LLM call only on
+          refusals, so average latency barely moves.
+  Risk:   On questions that are on-topic but truly unanswerable, a
+          second push can produce a made-up answer. Do NOT ship this
+          before the eval has such questions (things to improve, item 3);
+          otherwise you can't see that failure.
+  Reject if: false answers on unanswerable questions rise.
+
+=======================================================================
+STEP 3 - CALIBRATED ANSWERABILITY GATE (LIKELY, biggest algorithmic win)
+=======================================================================
+3.1 Replace four thresholds with one learned decision
+  Prerequisite: ~20+ on-topic-but-unanswerable dev questions (checked
+          against the PDFs). Today dev has only 6 off-topic questions,
+          which is too few negatives to learn from.
+  Where:  new src/gate.py; used in pipeline._run_hybrid() instead of
+          `confidence < min_confidence or centroid_sim < CENTROID_MIN_SIM`.
+  Features (all already computed per query; keep it to 4-6):
+          top rerank probability, best-child cosine, centroid cosine,
+          top BM25 score / (1 + top BM25 score), route == keyword.
+  Model:  Logistic regression written with numpy (standardize features,
+          L2 penalty, plain gradient descent, ~30 lines). Save the weights
+          and feature means/stds to data/index/gate.json, NOT a pickle.
+  Labels: 1 = question answerable from the corpus, 0 = not (off-topic or
+          unanswerable). Train on dev only.
+  Cut-off: Choose on dev from the precision/recall curve: the highest
+          threshold that still answers >= 98% of answerable dev questions.
+          Use leave-one-out on dev to report an honest dev number.
+  Switch: config GATE = "thresholds" | "learned" (default thresholds
+          until measured).
+  Why:    The remaining wrongful refusals come from the hard cut-offs
+          (#120 at 0.499 vs 0.5). With e5, in-scope and off-topic centroid
+          scores overlap, so no single centroid cut-off works. One
+          boundary over all signals uses them together and is
+          re-trainable in seconds after a model change, instead of
+          hand-tuning four numbers.
+  Measure: answer rate on answerable questions AND false-answer rate on
+          off-topic + unanswerable, dev (LOO) then held-out once.
+  Do not: Add question-text features (bag of words). With ~100
+          examples they memorize the dev set.
+  Do not: Fit on held-out, ever.
+  Risk:   Too few negatives -> the gate learns "anything on-topic is
+          answerable". This is why the prerequisite matters.
+
+=======================================================================
+STEP 4 - MODEL CHOICES (decided; change only with new measurements)
+=======================================================================
+4.1 Generator: default llama3.2:3b; llama3.1:8b via LLM_MODEL gives
+    24/27 vs 22/27 at 42 s vs 23 s mean. With a CUDA GPU, switch the
+    default to 8B.
+4.2 Embedding: e5-base-v2. Best measured CPU-friendly option (held-out
+    hybrid hit@5 0.889 vs bge-small 0.815, before titles). bge-base is the
+    only other candidate worth one run. Switching means re-indexing and
+    re-deriving VECTOR_MIN_SIM and CENTROID_MIN_SIM.
+4.3 Reranker: bge-reranker-base. Retrieval already finds the gold page
+    ~93% of the time; a bigger reranker costs CPU for little gain.
+4.4 GPU (optional, high value if available): install CUDA torch for the
+    GTX 1650. Effects: formula decoding in convert.py turns on
+    (re-convert: delete data/md/manifest.json or bump CONVERTER_VERSION),
+    and embedding, reranking and the 8B model all get faster.
+
+
+-----------------------------------------------------------------------
+5. WHAT NOT TO DO (considered and rejected for now)
+-----------------------------------------------------------------------
+  - HyDE / query rewriting: one more LLM call per question to improve
+    retrieval, which is not the bottleneck.
+  - bge-large, Qwen3-Embedding or larger rerankers on CPU: hours of
+    embedding for the part that already works.
+  - Retuning RRF k (60), chunk sizes (600/120) or BM25 tokenization: no
+    evidence they cause errors; tuning them on 49 dev questions overfits.
+  - A learned router trained on invented queries: wait for ~200 real
+    logged queries (logs/queries.jsonl) labelled by hand.
+  - The "v2" or structured "v3" prompts as default: measured before;
+    v2 loosened refusals, v3 added false refusals (see DECISIONS.md).
+  - Committing data/md, data/index, eval outputs or logs: all derived
+    and gitignored on purpose.
+
+
+-----------------------------------------------------------------------
+6. FINISHING CHECKLIST (after the last step)
+-----------------------------------------------------------------------
+  [ ] Full test suite passes.
+  [ ] Index rebuilt if any retrieval change landed; eval/generation cache
+      deleted.
+  [ ] Dev and held-out `python -m src.eval --configs router` run once each,
+      outputs backed up.
+  [ ] Correctness graded and labelled by grader; CIs reported.
+  [ ] README results table has a new column; DECISIONS.md has one line per
+      step, including rejected changes and their numbers.
+  [ ] "things to improve.txt" items marked done or still open.

@@ -233,8 +233,19 @@ session, not by hand, on 27 questions where one answer is about 4 points; the
 hit@5 drop is one question. The remaining misses are mostly the 3B model, not
 retrieval: in 5 of 8 wrong answers the gold page was retrieved (two said
 "NOT_FOUND" anyway), one in-scope question was refused by the reranker gate at
-0.499 against the 0.5 minimum, and one was a retrieval miss. Dev answers were
-not graded.
+0.499 against the 0.5 minimum, and one was a retrieval miss.
+
+**Dev set, end to end, current system** (Markdown + e5 + paper titles, 3B,
+`router`): 37 / 49 in-scope correct and all 6 general questions handled
+(4 refused, 2 small-talk replies), i.e. 43 / 55 = 78%, the **same** as the
+old system's 43 / 55. Exact 24 / 32 (auto-scored with the regex keys),
+conceptual 13 / 17 (AI-graded). hit@5 0.84 (old 0.88), mean latency 28.9 s.
+So the held-out gain (16 -> 22) does not show up on dev. Part of the held-out
+gain may be noise, and the old thresholds were tuned on these same dev
+questions, which flatters the old dev number. Dev misses: 4 refusals with the
+answer available (#22, #26, #29, #51), one wrong-paper answer that titles did
+not prevent (#8: an MMLU question answered from MMLU-Pro), and wrong or
+partial facts (#15, #16, #17, #34, #46, #47, #50).
 
 **Paper title on every chunk.** Each chunk now stores its paper's title (the first
 heading of its Markdown), and the title is prepended for embedding, BM25 and the
