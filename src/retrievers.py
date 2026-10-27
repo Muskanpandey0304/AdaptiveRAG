@@ -18,7 +18,7 @@ from src.config import (
     SENTENCE_TOP_N,
     SENTENCE_WINDOW,
 )
-from src.indexer import BM25_PATH, CENTROID_PATH, CHUNKS_PATH, FAISS_PATH, tokenize
+from src.indexer import BM25_PATH, CENTROID_PATH, CHUNKS_PATH, FAISS_PATH, META_PATH, tokenize
 from src.ingest import _split_sentences
 
 
@@ -69,7 +69,19 @@ class Retriever:
         bm25_path: Path = BM25_PATH,
         centroid_path: Path = CENTROID_PATH,
         parents_path: Path | None = None,
+        meta_path: Path | None = None,
     ) -> None:
+        # An index built with one embedding model queried with another returns
+        # plausible-looking nonsense, so fail loudly instead. Derived from
+        # chunks_path (like parents_path) so test fixtures never see the real one.
+        meta_path = Path(meta_path) if meta_path else Path(chunks_path).with_name(META_PATH.name)
+        if meta_path.exists():
+            built_with = json.loads(meta_path.read_text(encoding="utf-8"))["embed_model"]
+            if built_with != EMBED_MODEL:
+                raise RuntimeError(
+                    f"Index was built with {built_with!r} but EMBED_MODEL is {EMBED_MODEL!r}. "
+                    "Re-run `python -m src.indexer`, or set EMBED_MODEL to match the index."
+                )
         with open(chunks_path, encoding="utf-8") as f:
             self.chunks: list[dict] = json.load(f)
         # Derived from chunks_path (not a global default) so a Retriever

@@ -10,3 +10,4 @@ eval/results_*.md
 eval/to_grade*.csv
 .pytest_cache/
 .claude/
+data/md/

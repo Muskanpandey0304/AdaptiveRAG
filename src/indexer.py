@@ -13,12 +13,13 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
-from src.config import EMBED_MODEL
+from src.config import DOC_PREFIX, EMBED_MODEL
 
 CHUNKS_PATH = Path("data/index/chunks.json")
 FAISS_PATH = Path("data/index/faiss.index")
 BM25_PATH = Path("data/index/bm25.pkl")
 CENTROID_PATH = Path("data/index/centroid.npy")
+META_PATH = Path("data/index/meta.json")  # which embedding model built the index
 
 _TOKEN_RE = re.compile(r"\w+")
 
@@ -36,15 +37,16 @@ def tokenize(text: str) -> list[str]:
 def build_vector_index(chunks: list[dict]) -> faiss.Index:
     """Embed chunk texts and build a FAISS inner-product index over them.
 
-    No query prefix here -- these are passages, not queries (BGE's
-    asymmetric prefix only applies to the query side). Embeddings are
+    The query-side prefix is never used here -- these are passages (BGE's
+    asymmetric prefix only applies to queries); DOC_PREFIX is the model's
+    passage template, empty for BGE and "passage: " for E5. Embeddings are
     L2-normalized, which makes inner product equivalent to cosine
     similarity, so a plain IndexFlatIP can be used instead of a slower
     similarity computation.
     """
     model = SentenceTransformer(EMBED_MODEL)
-    texts = [chunk["text"] for chunk in chunks]
-    embeddings = model.encode(texts, normalize_embeddings=True)
+    texts = [DOC_PREFIX + chunk["text"] for chunk in chunks]
+    embeddings = model.encode(texts, normalize_embeddings=True, batch_size=32, show_progress_bar=True)
     embeddings = np.asarray(embeddings, dtype="float32")
 
     index = faiss.IndexFlatIP(embeddings.shape[1])
@@ -97,6 +99,8 @@ def main() -> None:
     bm25_index = build_bm25_index(chunks)
     with open(BM25_PATH, "wb") as f:
         pickle.dump(bm25_index, f)
+
+    META_PATH.write_text(json.dumps({"embed_model": EMBED_MODEL, "n_chunks": len(chunks)}), encoding="utf-8")
 
     print(f"Indexed {len(chunks)} chunks -> {FAISS_PATH}, {BM25_PATH}, {CENTROID_PATH}")
 

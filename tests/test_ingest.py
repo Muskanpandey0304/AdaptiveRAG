@@ -1,26 +1,20 @@
 """Tests for src/ingest.py.
 
-chunk_pages and clean_text are exercised with small synthetic page dicts --
-this tests the chunking/cleaning *logic*, not the project's real document
-data. data/raw/ is intentionally empty (the user hasn't supplied PDFs yet);
-per the project's rule against inventing data, we don't fabricate fake PDFs
-to stand in for the real corpus.
+chunk_pages and load_markdown are exercised with small synthetic pages and
+Markdown strings -- this tests the chunking *logic*, not the project's real
+documents.
 """
 
 import random
 
 from src.config import CHUNK_TOKENS
-from src.ingest import _find_repeated_lines, chunk_pages, clean_text, load_pdfs
+from src.ingest import chunk_pages, load_markdown, make_children
 
 
 def _page(source: str, page: int, n_sentences: int) -> dict:
     """Build one page of `n_sentences` short, distinct sentences."""
     text = " ".join(f"This is sentence number {i} about widgets." for i in range(n_sentences))
     return {"source": source, "page": page, "text": text}
-
-
-def test_load_pdfs_returns_empty_list_for_empty_folder(tmp_path) -> None:
-    assert load_pdfs(str(tmp_path)) == []
 
 
 def test_chunks_have_all_fields_and_are_nonempty() -> None:
@@ -50,35 +44,6 @@ def test_chunks_never_cross_page_boundary() -> None:
     assert {c["page"] for c in chunks} == {1, 2}
 
 
-def test_clean_text_dehyphenates_and_collapses_whitespace() -> None:
-    raw = "This is an imple-\nmentation   detail.\n\nNext paragraph."
-    cleaned = clean_text(raw)
-    assert "imple-\nmentation" not in cleaned
-    assert "implementation" in cleaned
-    assert "  " not in cleaned
-
-
-def test_clean_text_keeps_paragraph_breaks_for_chunking() -> None:
-    raw = "First paragraph here.\n\nSecond paragraph here."
-    cleaned = clean_text(raw)
-    assert "\n\n" in cleaned
-
-
-def test_clean_text_drops_repeated_header_footer_lines() -> None:
-    # The header/footer repeats on every page; the body differs per page so
-    # it's only the header/footer that crosses the 50%-of-pages threshold.
-    pages = [
-        {"source": "doc.pdf", "page": i, "text": f"CONFIDENTIAL\nReal content for page {i}.\nCONFIDENTIAL"}
-        for i in range(1, 5)
-    ]
-    repeated = _find_repeated_lines(pages)
-    assert "CONFIDENTIAL" in repeated
-
-    cleaned = clean_text(pages[0]["text"], repeated)
-    assert "CONFIDENTIAL" not in cleaned
-    assert "Real content for page 1." in cleaned
-
-
 def test_print_five_random_chunks(capsys) -> None:
     """No assertion -- prints sample chunks for the user to eyeball, per
     the spec's Step 3 acceptance criterion."""
@@ -89,8 +54,6 @@ def test_print_five_random_chunks(capsys) -> None:
 
 
 def test_make_children_link_to_parents_and_stay_on_the_same_page() -> None:
-    from src.ingest import make_children
-
     parents = chunk_pages([_page("doc.pdf", 1, 300), _page("doc.pdf", 2, 300)])
     children = make_children(parents)
 
@@ -102,3 +65,72 @@ def test_make_children_link_to_parents_and_stay_on_the_same_page() -> None:
         assert (child["source"], child["page"]) == (parent["source"], parent["page"])
         assert child["text"] in parent["text"]  # a child is a span of its parent
     assert {c["parent_id"] for c in children} == set(parent_by_id)  # no parent left without children
+
+
+def test_load_markdown_splits_pages_and_lifts_images_out_of_the_text(tmp_path) -> None:
+    (tmp_path / "paper.md").write_text(
+        "<!-- page: 1 -->\n\nFirst page text.\n\n![Image](paper_assets/fig1.png)\n\n"
+        "<!-- page: 2 -->\n\n<!-- image -->\n\nSecond page text.\n",
+        encoding="utf-8",
+    )
+    pages = load_markdown(tmp_path)
+    assert [(p["source"], p["page"]) for p in pages] == [("paper.pdf", 1), ("paper.pdf", 2)]
+    assert pages[0]["text"] == "First page text."
+    assert pages[0]["images"] == ["paper_assets/fig1.png"]
+    assert pages[1]["text"] == "Second page text."
+    assert "images" not in pages[1]
+
+
+def test_load_markdown_empty_folder(tmp_path) -> None:
+    assert load_markdown(tmp_path) == []
+
+
+def test_small_table_stays_whole_with_its_row_structure() -> None:
+    table = "| Model | Acc |\n|---|---|\n| A | 1.0 |\n| B | 2.0 |"
+    text = "Intro sentence about models.\n\n" + table + "\n\nAfter the table."
+    chunks = chunk_pages([{"source": "d.pdf", "page": 1, "text": text}])
+    assert len(chunks) == 1
+    assert table in chunks[0]["text"]  # newlines preserved, not flattened into one line
+
+
+def test_oversized_table_splits_by_rows_and_repeats_the_header() -> None:
+    header = "| Model | Score |\n|---|---|"
+    rows = [f"| model number {i} with a long descriptive name | {i}.5 |" for i in range(200)]
+    page = {"source": "d.pdf", "page": 1, "text": header + "\n" + "\n".join(rows)}
+    chunks = chunk_pages([page], chunk_tokens=120)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert chunk["text"].startswith(header)
+        assert all(line.startswith("|") for line in chunk["text"].split("\n"))
+    all_rows = [line for c in chunks for line in c["text"].split("\n")[2:]]
+    assert all_rows == rows  # no row lost or duplicated
+
+
+def test_display_formula_is_never_split() -> None:
+    formula = "$$\nE = mc^2 + \\frac{a}{b}\n$$"
+    filler = " ".join(f"Filler sentence {i} here." for i in range(60))
+    page = {"source": "d.pdf", "page": 1, "text": f"{filler}\n\n{formula}\n\n{filler}"}
+    chunks = chunk_pages([page], chunk_tokens=100)
+    assert sum(formula in c["text"] for c in chunks) == 1
+
+
+def test_heading_is_not_stranded_at_the_end_of_a_chunk() -> None:
+    body = " ".join(f"Body sentence {i} about widgets." for i in range(16))  # about fills a 120-token chunk
+    page = {"source": "d.pdf", "page": 1, "text": f"{body}\n\n## Results\n\n{body}"}
+    chunks = chunk_pages([page], chunk_tokens=120, chunk_overlap=0)
+    assert len(chunks) > 1
+    assert not any(c["text"].rstrip().endswith("## Results") for c in chunks)
+    assert any(c["text"].startswith("## Results") for c in chunks)
+
+
+def test_chunks_carry_the_pages_images() -> None:
+    page = {"source": "d.pdf", "page": 1, "text": "Some text.", "images": ["d_assets/a.png"]}
+    assert chunk_pages([page])[0]["images"] == ["d_assets/a.png"]
+
+
+def test_load_markdown_strips_table_padding(tmp_path) -> None:
+    (tmp_path / "p.md").write_text(
+        "<!-- page: 1 -->\n\n|    Model    |   Acc |\n|----------|-------|\n| A           |  0.9 |\n",
+        encoding="utf-8",
+    )
+    assert load_markdown(tmp_path)[0]["text"] == "| Model | Acc |\n|---|---|\n| A | 0.9 |"

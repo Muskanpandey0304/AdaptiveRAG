@@ -63,14 +63,28 @@ LLM_TEMPERATURE = 0.0
 
 # --- Embedding and reranking models ----------------------------------------
 
-# BGE small: a strong, small, open embedding model. "small" keeps the project
-# runnable on a laptop CPU without a GPU.
-EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+# Which embedding model builds and queries the index. Override with the
+# EMBED_MODEL env var, then re-run `python -m src.indexer` (the index records
+# its model and refuses to load under a different one). `python -m
+# src.embed_bench` compares candidates; results are in DECISIONS.md.
+#
+# The cosine thresholds below (VECTOR_MIN_SIM, CENTROID_MIN_SIM) were tuned on
+# bge-small. Cosine scales differ per model, so after switching models re-derive
+# them from the score distributions embed_bench prints.
+EMBED_MODEL: str = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")
 
-# BGE models were trained asymmetrically: queries need this instruction
-# prefix prepended so the query embedding lands in the same space as the
-# (unprefixed) passage embeddings. Passages are embedded without it.
-QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+# Models are trained with their own query/passage templates; using the wrong
+# one silently costs accuracy. model -> (query prefix, passage prefix).
+# BGE: only queries get an instruction. E5: both sides are tagged.
+_BGE_QUERY = "Represent this sentence for searching relevant passages: "
+EMBED_PREFIXES: dict[str, tuple[str, str]] = {
+    "BAAI/bge-small-en-v1.5": (_BGE_QUERY, ""),
+    "BAAI/bge-base-en-v1.5": (_BGE_QUERY, ""),
+    "BAAI/bge-large-en-v1.5": (_BGE_QUERY, ""),
+    "intfloat/e5-base-v2": ("query: ", "passage: "),
+    "intfloat/e5-large-v2": ("query: ", "passage: "),
+}
+QUERY_PREFIX, DOC_PREFIX = EMBED_PREFIXES.get(EMBED_MODEL, ("", ""))
 
 # Cross-encoder reranker, used only when `use_rerank=True` in the pipeline.
 RERANK_MODEL = "BAAI/bge-reranker-base"
@@ -122,7 +136,11 @@ RRF_K = 60
 BM25_MIN_SCORE = 15.0
 # Best-child cosine: scoped min 0.665 (p10 0.73); 0.60 answers every scoped
 # question and drops half of the off-topic ones that 0.45 let through.
-VECTOR_MIN_SIM = 0.60
+# Re-derived for e5-base-v2 (cosines sit in ~0.75-0.94, so the bge-small value
+# of 0.60 would pass everything). Dev: scoped best-chunk min 0.852, off-topic max
+# 0.831; held-out: scoped min 0.836, off-topic max 0.880. 0.83 answers 100% of
+# scoped on both sets; off-topic leakage is left to the reranker gate.
+VECTOR_MIN_SIM = 0.83
 
 # Confidence floor on the rerank path (bge-reranker relevance probability,
 # 0-1). Scoped questions' top hit scored >= 0.84; off-topic ones were
@@ -146,4 +164,9 @@ RERANK_MIN_PROB = 0.5
 # that was helpful!", 0.589 -- already caught by the router's greeting
 # regex before this gate is ever reached in normal operation). See
 # DECISIONS.md.
-CENTROID_MIN_SIM = 0.55
+# Re-derived for e5-base-v2 (the 0.44-0.78 range below was bge-small's). e5
+# centroid cosine: dev scoped min 0.808 / off-topic max 0.812; held-out scoped
+# min 0.832 / off-topic max 0.863 -- the groups overlap, so this gate is weaker
+# than it was and the reranker carries more of the off-topic refusals.
+# 0.82 answers 98% of dev and 100% of held-out scoped questions.
+CENTROID_MIN_SIM = 0.82

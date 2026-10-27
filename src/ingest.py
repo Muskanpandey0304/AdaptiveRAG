@@ -1,19 +1,22 @@
-"""Load PDFs, clean their text, and split them into retrieval chunks.
+"""Read the Markdown produced by `src.convert` and split it into retrieval chunks.
 
-Run as a script (`python -m src.ingest`) to read every PDF in data/raw/
-and write data/index/chunks.json.
+Run as a script (`python -m src.ingest`): it first converts any new or changed
+PDF in data/raw/ to data/md/ (see src/convert.py), then chunks every .md file
+and writes data/index/parents.json + chunks.json. Markdown, not the PDF, is the
+single source of truth for chunking.
+
+Markdown-aware chunking: a table or a display formula is never cut in half
+(an oversized table is split by rows, repeating its header), and a heading is
+never left stranded at the end of a chunk away from the text it introduces.
 """
 
 import json
 import re
-from collections import Counter
 from pathlib import Path
-
-from pypdf import PdfReader
 
 from src.config import CHILD_OVERLAP, CHILD_TOKENS, CHUNK_OVERLAP, CHUNK_TOKENS
 
-RAW_DIR = Path("data/raw")
+MD_DIR = Path("data/md")
 CHUNKS_PATH = Path("data/index/chunks.json")  # child chunks (what gets indexed)
 PARENTS_PATH = Path("data/index/parents.json")  # parent chunks (what the LLM reads)
 
@@ -21,70 +24,53 @@ PARENTS_PATH = Path("data/index/parents.json")  # parent chunks (what the LLM re
 # enough for sizing chunks; we don't need an exact tokenizer here.
 WORDS_TO_TOKENS = 1.3
 
-# Not whitespace, so it survives the `\s+` collapse below while standing in
-# for a paragraph break (a blank line) that we want chunk_pages to still be
-# able to split on.
-_PARA_MARKER = "\x00"
+_PAGE_RE = re.compile(r"^<!-- page: (\d+) -->[ \t]*$", re.MULTILINE)
+_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)  # e.g. docling's "<!-- image -->" placeholder
+_HEADING_RE = re.compile(r"#{1,6}\s")
+_TABLE_PAD_RE = re.compile(r"(?m)^(\s*\|.*)$")
+
+# Unit kinds: "prose" can be split and overlapped; "heading" must stay with the
+# text after it; "atomic" (table piece, display formula) is never cut.
+_PROSE, _HEADING, _ATOMIC = "prose", "heading", "atomic"
+
+Unit = tuple[str, str, str]  # (text, kind, separator placed before it)
 
 
-def load_pdfs(folder: str) -> list[dict]:
-    """Read every PDF in `folder` into one dict per page.
+def _compact_tables(text: str) -> str:
+    """Strip the column-alignment padding docling puts in pipe tables ("|  a   |"
+    and "|-----|"). It carries no information but can multiply a wide table's
+    size many times over, wasting chunk budget and LLM context."""
 
-    Returns a list of {"source": filename, "page": 1-indexed int, "text": str},
-    in filename then page order.
+    def compact(match: re.Match) -> str:
+        line = re.sub(r" {2,}", " ", match.group(1))
+        return re.sub(r"-{4,}", "---", line)
+
+    return _TABLE_PAD_RE.sub(compact, text)
+
+
+def load_markdown(folder: Path | str = MD_DIR) -> list[dict]:
+    """Read every .md file in `folder` into one dict per page.
+
+    Pages are delimited by the `<!-- page: N -->` markers src.convert writes.
+    Returns [{"source": "<stem>.pdf", "page": N, "text": str, "images": [...]}]
+    in filename then page order. `source` stays the original PDF's name, so
+    citations and the eval's gold_source keep pointing at the paper. Figure
+    references are lifted out of the text into `images` (paths relative to
+    `folder`): the picture itself carries no words to embed.
     """
     pages: list[dict] = []
-    for pdf_path in sorted(Path(folder).glob("*.pdf")):
-        reader = PdfReader(str(pdf_path))
-        for i, page in enumerate(reader.pages):
-            pages.append(
-                {
-                    "source": pdf_path.name,
-                    "page": i + 1,
-                    "text": page.extract_text() or "",
-                }
-            )
+    for md_path in sorted(Path(folder).glob("*.md")):
+        parts = _PAGE_RE.split(md_path.read_text(encoding="utf-8"))
+        # split() with one capture group -> [preamble, "1", body1, "2", body2, ...]
+        for page_no, body in zip(parts[1::2], parts[2::2]):
+            images = _IMAGE_RE.findall(body)
+            text = _compact_tables(_COMMENT_RE.sub("", _IMAGE_RE.sub("", body)))
+            page = {"source": f"{md_path.stem}.pdf", "page": int(page_no), "text": text.strip()}
+            if images:
+                page["images"] = images
+            pages.append(page)
     return pages
-
-
-def clean_text(text: str, repeated_lines: set[str] | None = None) -> str:
-    """Collapse whitespace, rejoin hyphenated line breaks, and drop repeated
-    header/footer lines -- while keeping blank-line paragraph breaks so
-    chunk_pages can still split on them.
-
-    `repeated_lines` is computed once across a whole document's pages by
-    `_find_repeated_lines`, since a single page can't tell what repeats.
-    """
-    if repeated_lines:
-        lines = [line for line in text.split("\n") if line.strip() not in repeated_lines]
-        text = "\n".join(lines)
-
-    # A hyphen immediately followed by a line break is almost always a word
-    # broken across the line, e.g. "imple-\nmentation" -> "implementation".
-    text = re.sub(r"-\n", "", text)
-
-    # A blank line (2+ consecutive newlines) is a paragraph break -- protect
-    # it before the general whitespace collapse, then restore it afterwards.
-    text = re.sub(r"\n{2,}", _PARA_MARKER, text)
-    text = re.sub(r"\s+", " ", text)
-    text = text.replace(_PARA_MARKER, "\n\n")
-    return text.strip()
-
-
-def _find_repeated_lines(pages: list[dict]) -> set[str]:
-    """Find lines that appear on more than 50% of a document's pages.
-
-    These are almost always running headers/footers (page numbers, titles)
-    rather than content, so ingest drops them.
-    """
-    if not pages:
-        return set()
-    line_page_counts: Counter[str] = Counter()
-    for page in pages:
-        seen_this_page = {line.strip() for line in page["text"].split("\n") if line.strip()}
-        line_page_counts.update(seen_this_page)
-    threshold = len(pages) * 0.5
-    return {line for line, count in line_page_counts.items() if count > threshold}
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -104,9 +90,9 @@ def _units_for_paragraph(paragraph: str, max_tokens: float) -> list[str]:
 
     Tries to keep the whole paragraph as one unit; falls back to sentences,
     and -- only for the rare sentence that's still too big on its own --
-    fixed-size word groups. This guarantees every unit chunk_pages packs is
-    bounded, so a single run-on sentence can't blow a chunk past the
-    CHUNK_TOKENS * 1.5 limit the acceptance test checks.
+    fixed-size word groups. This guarantees every prose unit is bounded, so a
+    single run-on sentence can't blow a chunk past the CHUNK_TOKENS * 1.5
+    limit the acceptance test checks.
     """
     if _approx_tokens(paragraph) <= max_tokens:
         return [paragraph]
@@ -123,45 +109,127 @@ def _units_for_paragraph(paragraph: str, max_tokens: float) -> list[str]:
     return units
 
 
+def _split_blocks(text: str) -> list[str]:
+    """Split page text into blank-line-separated blocks, keeping a `$$ ... $$`
+    display formula together even if the LaTeX itself contains a blank line."""
+    blocks: list[str] = []
+    open_formula: str | None = None
+    for paragraph in re.split(r"\n\s*\n", text):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        if open_formula is not None:
+            open_formula += "\n\n" + paragraph
+            if paragraph.endswith("$$"):
+                blocks.append(open_formula)
+                open_formula = None
+        elif paragraph.startswith("$$") and not (len(paragraph) > 2 and paragraph.endswith("$$")):
+            open_formula = paragraph
+        else:
+            blocks.append(paragraph)
+    if open_formula is not None:
+        blocks.append(open_formula)
+    return blocks
+
+
+def _is_table(block: str) -> bool:
+    """True if every line of `block` is a Markdown pipe-table row."""
+    return all(line.lstrip().startswith("|") for line in block.split("\n"))
+
+
+def _table_pieces(table: str, max_tokens: float) -> list[str]:
+    """Split a Markdown table into row groups of ~max_tokens, each repeating
+    the header row(s), so every piece still reads as a table with column names."""
+    lines = table.split("\n")
+    has_rule = len(lines) > 2 and set(lines[1].replace("|", "").strip()) <= set("-: ")
+    header, rows = lines[: 2 if has_rule else 1], lines[2 if has_rule else 1 :]
+    pieces: list[str] = []
+    current: list[str] = []
+    for row in rows:
+        if current and _approx_tokens("\n".join(header + current + [row])) > max_tokens:
+            pieces.append("\n".join(header + current))
+            current = []
+        current.append(row)
+    if current:
+        pieces.append("\n".join(header + current))
+    return pieces or [table]
+
+
+def _page_units(text: str, max_tokens: float) -> list[Unit]:
+    """Turn page text into units for packing.
+
+    The separator is "\\n\\n" before a new block and " " between sentences of
+    one split paragraph, so a rendered chunk keeps its original layout.
+    """
+    units: list[Unit] = []
+    for block in _split_blocks(text):
+        if _is_table(block):
+            pieces = [block] if _approx_tokens(block) <= max_tokens else _table_pieces(block, max_tokens)
+            units.extend((piece, _ATOMIC, "\n\n") for piece in pieces)
+        elif block.startswith("$$"):
+            units.append((block, _ATOMIC, "\n\n"))
+        elif _HEADING_RE.match(block) and "\n" not in block:
+            units.append((block, _HEADING, "\n\n"))
+        else:
+            for i, piece in enumerate(_units_for_paragraph(block, max_tokens)):
+                units.append((piece, _PROSE, "\n\n" if i == 0 else " "))
+    return units
+
+
+def _render(units: list[Unit]) -> str:
+    """Join units with their separators back into chunk text."""
+    return units[0][0] + "".join(sep + text for text, _, sep in units[1:])
+
+
+def _overlap_tail(units: list[Unit], overlap_words: int) -> list[Unit]:
+    """The last `overlap_words` words of the trailing prose, as one unit to
+    start the next chunk with. Tables, formulas and headings are never
+    carried over: repeating half a table would be noise, not context."""
+    words: list[str] = []
+    for text, kind, _ in reversed(units):
+        if kind != _PROSE:
+            break
+        words = text.split() + words
+        if len(words) >= overlap_words:
+            break
+    tail = words[-overlap_words:] if overlap_words else []
+    return [(" ".join(tail), _PROSE, "\n\n")] if tail else []
+
+
 def chunk_pages(
     pages: list[dict], chunk_tokens: int = CHUNK_TOKENS, chunk_overlap: int = CHUNK_OVERLAP
 ) -> list[dict]:
-    """Split each page's text into ~chunk_tokens-token chunks with overlap.
+    """Split each page's Markdown into ~chunk_tokens-token chunks with overlap.
 
-    Splits on paragraph boundaries first, then sentence boundaries (see
-    `_units_for_paragraph`). Chunks never cross a page boundary, since a
-    citation needs to point at exactly one page. Each chunk:
-    {id: int, text, source, page}.
+    Splits on blocks first (paragraph, table, formula, heading), then sentence
+    boundaries (see `_units_for_paragraph`). Chunks never cross a page
+    boundary, since a citation needs to point at exactly one page. Each chunk:
+    {id: int, text, source, page}, plus `images` (figure files on that page)
+    when the page has any.
     """
     chunks: list[dict] = []
-    next_id = 0
     overlap_words = int(chunk_overlap / WORDS_TO_TOKENS)
 
     for page in pages:
-        paragraphs = [p for p in page["text"].split("\n\n") if p.strip()]
-        if not paragraphs and page["text"].strip():
-            paragraphs = [page["text"]]
+        current: list[Unit] = []
+        page_chunks: list[str] = []
+        for unit in _page_units(page["text"], chunk_tokens):
+            if current and _approx_tokens(_render(current)) + _approx_tokens(unit[0]) > chunk_tokens:
+                # A heading ending the chunk would be cut off from its text: move it forward.
+                stranded: list[Unit] = []
+                while len(current) > 1 and current[-1][1] == _HEADING:
+                    stranded.insert(0, current.pop())
+                page_chunks.append(_render(current))
+                current = stranded or _overlap_tail(current, overlap_words)
+            current.append(unit)
+        if current:
+            page_chunks.append(_render(current))
 
-        units: list[str] = []
-        for paragraph in paragraphs:
-            units.extend(_units_for_paragraph(paragraph, chunk_tokens))
-
-        current_words: list[str] = []
-        for unit in units:
-            unit_words = unit.split()
-            if current_words and _approx_tokens(" ".join(current_words)) + _approx_tokens(unit) > chunk_tokens:
-                chunks.append(
-                    {"id": next_id, "text": " ".join(current_words), "source": page["source"], "page": page["page"]}
-                )
-                next_id += 1
-                current_words = current_words[-overlap_words:] if overlap_words else []
-            current_words.extend(unit_words)
-
-        if current_words:
-            chunks.append(
-                {"id": next_id, "text": " ".join(current_words), "source": page["source"], "page": page["page"]}
-            )
-            next_id += 1
+        for text in page_chunks:
+            chunk = {"id": len(chunks), "text": text, "source": page["source"], "page": page["page"]}
+            if page.get("images"):
+                chunk["images"] = page["images"]
+            chunks.append(chunk)
 
     return chunks
 
@@ -185,15 +253,15 @@ def make_children(parents: list[dict]) -> list[dict]:
 
 
 def main() -> None:
-    """CLI entry point: ingest data/raw/*.pdf into parents.json + chunks.json."""
-    pages = load_pdfs(str(RAW_DIR))
-    if not pages:
-        print(f"No PDFs found in {RAW_DIR}/. Add PDF files there and re-run.")
-        return
+    """CLI entry point: convert new PDFs to Markdown, then chunk every .md file
+    into parents.json + chunks.json."""
+    from src.convert import RAW_DIR, convert_all
 
-    repeated_lines = _find_repeated_lines(pages)
-    for page in pages:
-        page["text"] = clean_text(page["text"], repeated_lines)
+    convert_all(RAW_DIR, MD_DIR)
+    pages = load_markdown(MD_DIR)
+    if not pages:
+        print(f"No PDFs found in {RAW_DIR}/ (nothing in {MD_DIR}/). Add PDF files there and re-run.")
+        return
 
     parents = chunk_pages(pages)
     children = make_children(parents)

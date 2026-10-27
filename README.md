@@ -12,8 +12,8 @@ documents" instead of guessing when nothing relevant was actually retrieved.
 
 Built as a from-scratch learning project — every piece (chunking, FAISS/BM25
 indexing, RRF fusion, routing, confidence gating) is implemented directly
-with `sentence-transformers`, `faiss-cpu`, `rank_bm25`, and `pypdf`, not a
-RAG framework, so each part is easy to point at and explain.
+with `sentence-transformers`, `faiss-cpu`, `rank_bm25`, and `docling` (PDF to
+Markdown), not a RAG framework, so each part is easy to point at and explain.
 
 ## Architecture
 
@@ -79,11 +79,13 @@ ollama pull llama3.1
 ## Running each step
 
 ```bash
-# 1. Add PDFs to data/raw/, then chunk them (parent + child chunks)
-python -m src.ingest            # writes data/index/parents.json, data/index/chunks.json (children)
+# 1. Add PDFs to data/raw/, then convert + chunk them. New or changed PDFs are
+#    converted to Markdown first (data/md/, incremental), then chunked.
+python -m src.ingest            # writes data/md/*.md, data/index/parents.json, chunks.json (children)
+python -m src.convert           # (optional) just the PDF -> Markdown step
 
 # 2. Build the FAISS vector index and BM25 index over the child chunks
-python -m src.indexer           # writes data/index/faiss.index, bm25.pkl, centroid.npy
+python -m src.indexer           # writes data/index/faiss.index, bm25.pkl, centroid.npy, meta.json
 
 # 3. Run the test suite
 pytest -v
@@ -159,6 +161,68 @@ just 3 examples, from the simplest baseline, before the router or
 confidence gating ever enter the picture. (The literal `[n]` still shows up
 in about 15% of current answers; see Limitations.)
 
+## PDF to Markdown conversion and embedding comparison
+
+PDFs are no longer chunked from raw `pypdf` text. `src/convert.py` runs
+[Docling](https://github.com/docling-project/docling) once per PDF (cached by
+file hash, so adding a paper converts only that paper) and writes
+`data/md/<paper>.md` plus `data/md/<paper>_assets/` for figures. Chunking
+(`src/ingest.py`) reads only the Markdown, which is the single source of truth.
+
+- Tables come out as pipe tables and are never cut mid-row; an oversized table
+  splits by rows with its header repeated. Headings stay with the text they
+  introduce. Figures are saved as PNGs and listed in each chunk's `images`
+  field; their pixels are not embedded.
+- `<!-- page: N -->` markers keep citations page-accurate (chunks never cross a
+  page), and `source` is still the original PDF name.
+- Docling uses the PDF text layer and OCRs only image regions, so scanned PDFs
+  also work. Formula-to-LaTeX is **off on CPU** (about 195 s per formula) and
+  switches on automatically with a CUDA GPU (`CONVERT_FORMULAS=1` forces it), so
+  formulas are currently missing from the Markdown.
+- Converting the 26 papers (925 pages) took about 1.3 hours on CPU with formulas
+  off. Markdown chunking gives 1,623 parents / 8,181 children (previously
+  1,564 / 7,837).
+
+`EMBED_MODEL` is now an env var with the right query/passage prefixes per
+model, and the index records which model built it (`meta.json`) and refuses to
+load under a different one. `python -m src.embed_bench` compares models;
+results are in `eval/embeddings.md`. Retrieval only, hybrid (BM25 + vector,
+RRF), no reranker, same questions:
+
+| Model | Dev hit@5 (pypdf to Markdown) | Held-out hit@5 (pypdf to Markdown) | Held-out MRR |
+|---|---|---|---|
+| bge-small | 0.796 to 0.837 | 0.778 to 0.815 | 0.564 to 0.633 |
+| e5-base-v2 | 0.796 to 0.857 | 0.778 to 0.889 | 0.657 to 0.728 |
+
+The default is now **e5-base-v2** and the index was rebuilt with it. Cosine
+scores compress with e5 (about 0.75-0.94), so the thresholds were re-derived on
+the dev set: `VECTOR_MIN_SIM` 0.60 -> 0.83 and `CENTROID_MIN_SIM` 0.55 -> 0.82.
+The centroid gate is weaker with e5 (in-scope and off-topic scores overlap), so
+the reranker now carries more of the off-topic refusals.
+
+### End-to-end, held-out set (27 in-scope + 12 off-topic), `router` config
+
+| | Old (pypdf + bge-small) | New (Markdown + e5-base) |
+|---|---|---|
+| hit@5 (hybrid+rerank, retrieval only) | 0.93 | 0.89 |
+| Correct in-scope answers | 16 / 27 (59%) | 19 / 27 (70%) |
+| Off-topic questions refused | 11 / 12 | 12 / 12 |
+
+Dev (49 in-scope), retrieval only: hybrid 0.837, hybrid+rerank 0.898 (old 0.90).
+Mean router latency 21 s on dev, 27.6 s on held-out (CPU shared with other jobs).
+
+How to read it: no regression, probable gain. Correctness was graded by an AI
+session, not by hand, on 27 questions where one answer is about 4 points; the
+hit@5 drop is one question. The remaining misses are mostly the 3B model, not
+retrieval: in 5 of 8 wrong answers the gold page was retrieved (two said
+"NOT_FOUND" anyway), one in-scope question was refused by the reranker gate at
+0.499 against the 0.5 minimum, and one was a retrieval miss. Dev answers were
+not graded.
+
+Other caveats: bge-base did not finish and is not compared; bge-large and
+Qwen3-Embedding-0.6B were skipped on purpose (hours of CPU embedding for an
+uncertain gain). The older sections below were measured on the pypdf chunks.
+
 ## Parent-child chunking and the rerank fix
 
 Two post-evaluation changes (rationale in `DECISIONS.md`), measured
@@ -177,7 +241,8 @@ set (the 6 `general` ones have no gold page). Before → after:
 - **Parent-child chunking.** Children (~120 tokens) are indexed; their
   parent (~600 tokens, never crossing a page) is what the LLM reads.
   Chosen over heading-based chunking because `pypdf` output from two-column
-  papers has no reliable headings to split on.
+  papers had no reliable headings. (The Markdown conversion below now
+  provides headings; chunking keeps them attached but still sizes by tokens.)
 - **Rerank bug.** The cross-encoder used to rerank only the 5 hits hybrid
   search had already picked, so it could never promote a better candidate,
   which is why `hybrid+rerank` matched `hybrid` exactly (0.76) in the first
@@ -382,10 +447,10 @@ machine, retrieval configs averaged ~17-25 s per question and the router ~21 s.
 - The automated test suite still runs against small synthetic fixtures
   (not the real corpus) for speed and determinism; the real corpus is
   only exercised by `python -m src.eval` and manual use.
-- Chunking's paragraph-boundary detection depends on the PDF text
-  extraction preserving blank-line breaks, which many PDFs don't encode;
-  in practice, chunking mostly falls through to the sentence-boundary
-  step (see `DECISIONS.md`).
+- Chunking now depends on Docling's Markdown, whose blocks are reliable, but
+  extraction errors (a mis-read table, missing formulas on CPU) flow straight
+  into the chunks. Numbers in the sections below were measured on the earlier
+  pypdf chunks and have not been re-run on the Markdown index.
 - Token counts are approximate (`word count × 1.3`), not an exact match
   for any specific model's tokenizer.
 - Confidence thresholds (`BM25_MIN_SCORE`, `VECTOR_MIN_SIM`,
