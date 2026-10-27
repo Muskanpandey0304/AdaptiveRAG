@@ -25,7 +25,19 @@ GREETING_RE = re.compile(
 # digit" so an empty/whitespace-only string can't match.
 ARITHMETIC_RE = re.compile(r"^\s*[\d\s.()+\-*/=]+\s*$")
 
-IDENTITY_RE = re.compile(r"\b(who are you|what are you|what can you do|what do you do)\b", re.IGNORECASE)
+# Small talk that may follow a greeting ("Hi, how are you today?") and still
+# counts as chit-chat rather than a real question.
+SMALL_TALK_RE = re.compile(r"\b(how are you|how's it going|how is it going|what's up|how do you do)\b", re.IGNORECASE)
+
+# The whole message must be the identity question. Unanchored, "What do you do
+# with the pass@k metric?" was answered from the model's memory with no retrieval.
+IDENTITY_RE = re.compile(
+    r"^\s*(?:(?:so|and|hey)[,\s]+)?(who are you|what are you|what can you do|what do you do)\s*[?!.]*\s*$",
+    re.IGNORECASE,
+)
+
+# "e.g." / "i.e." / "vs." look like "filename.ext" to FILE_PATH_RE; drop them first.
+LATIN_ABBREV_RE = re.compile(r"\b(?:e\.g|i\.e|etc|vs|cf|et al)\.", re.IGNORECASE)
 
 # --- keyword route patterns -------------------------------------------------
 
@@ -36,7 +48,9 @@ QUOTED_PHRASE_RE = re.compile(r'"[^"]+"|\'[^\']+\'')
 IDENTIFIER_RE = re.compile(r"\b[A-Z]{1,6}[-_]?\d{2,}\b")
 
 # e.g. "v2.1.0", "1.4" -- a dotted version number, "v" prefix optional.
-VERSION_RE = re.compile(r"\bv?\d+\.\d+(?:\.\d+)?\b")
+# The lookbehind skips model names ("GPT-3.5", "Llama-2.1"), which are not
+# software versions and made comparison questions take the keyword route.
+VERSION_RE = re.compile(r"(?<![A-Za-z]-)\bv?\d+\.\d+(?:\.\d+)?\b")
 
 # e.g. "chunk_pages", "build_vector_index".
 SNAKE_CASE_RE = re.compile(r"\b[a-z0-9]+_[a-z0-9_]+\b")
@@ -46,7 +60,8 @@ SNAKE_CASE_RE = re.compile(r"\b[a-z0-9]+_[a-z0-9_]+\b")
 CAMEL_CASE_RE = re.compile(r"\b(?:[a-z]+[A-Z][a-zA-Z0-9]*|[A-Z][a-z]+[A-Z][a-zA-Z0-9]*)\b")
 
 # e.g. "src/config.py", "data/raw/notes.txt", or a bare "filename.ext" token.
-FILE_PATH_RE = re.compile(r"[./\\][\w./\\-]*\w|\b[\w-]+\.[a-zA-Z]{1,5}\b")
+# A leading "." only counts at a word boundary, so the ".5" in "GPT-3.5" is not a path.
+FILE_PATH_RE = re.compile(r"(?:(?<!\w)\.|[/\\])[\w./\\-]*\w|\b[\w-]+\.[a-zA-Z]{1,5}\b")
 
 # e.g. "--max-findings", "--no-verify".
 CLI_FLAG_RE = re.compile(r"--[a-zA-Z][\w-]*")
@@ -81,24 +96,30 @@ def route(query: str) -> tuple[str, str]:
     Returns (route, reason): route is one of "direct", "keyword", "hybrid";
     reason names which rule fired ("default" for the hybrid fallback).
     """
-    if GREETING_RE.search(query):
+    # A greeting only short-circuits retrieval if nothing is being asked: "Thanks!
+    # What does HELM measure?" and "Hi, how many subjects does MMLU cover?" are
+    # real questions and must be retrieved. Small talk ("Hi, how are you?")
+    # still counts even though it ends in "?".
+    if GREETING_RE.search(query) and ("?" not in query or SMALL_TALK_RE.search(query)):
         return "direct", "greeting_or_thanks"
     if ARITHMETIC_RE.match(query) and any(c.isdigit() for c in query):
         return "direct", "pure_arithmetic"
     if IDENTITY_RE.search(query):
         return "direct", "identity_question"
 
+    plain = LATIN_ABBREV_RE.sub(" ", query)  # for the version / file-path checks only
+
     if QUOTED_PHRASE_RE.search(query):
         return "keyword", "quoted_phrase"
     if IDENTIFIER_RE.search(query):
         return "keyword", "identifier_pattern"
-    if VERSION_RE.search(query):
+    if VERSION_RE.search(plain):
         return "keyword", "version_pattern"
     if SNAKE_CASE_RE.search(query):
         return "keyword", "snake_case_token"
     if CAMEL_CASE_RE.search(query):
         return "keyword", "camel_case_token"
-    if FILE_PATH_RE.search(query):
+    if FILE_PATH_RE.search(plain):
         return "keyword", "file_path"
     if CLI_FLAG_RE.search(query):
         return "keyword", "cli_flag"

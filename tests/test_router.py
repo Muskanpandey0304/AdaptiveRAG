@@ -88,3 +88,30 @@ def test_is_factoid_question_rejects_explanatory_and_other_questions() -> None:
         "Hi, how are you?",
     ):
         assert not is_factoid_question(q), q
+
+
+@pytest.mark.parametrize(
+    "query,expected_route",
+    [
+        # Greeting prefix + a real question must be retrieved, not answered from memory.
+        ("Hi, how many subjects does MMLU cover?", "hybrid"),
+        ("Thanks! What does HELM measure?", "hybrid"),
+        # Small talk and bare thanks stay direct (the dev set's general questions).
+        ("Hi, how are you today?", "direct"),
+        ("Thanks, that was helpful!", "direct"),
+        # "what do you do" mid-sentence is not an identity question.
+        ("What do you do with the pass@k metric in benchmarks?", "hybrid"),
+        ("What do you do?", "direct"),
+        # Model names like GPT-3.5 are not version numbers.
+        ("How does GPT-3.5 compare to GPT-4 on MMLU?", "hybrid"),
+        # "e.g." is not a file name.
+        ("Why do benchmarks fail, e.g. on contamination of the test set?", "hybrid"),
+    ],
+)
+def test_route_regressions(query: str, expected_route: str) -> None:
+    assert route(query)[0] == expected_route, route(query)
+
+
+def test_real_version_numbers_and_files_still_go_to_keyword() -> None:
+    assert route("What changed in v2.1.0?") == ("keyword", "version_pattern")
+    assert route("open src/config.py") == ("keyword", "file_path")
