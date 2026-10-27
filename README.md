@@ -94,6 +94,10 @@ pytest -v
 python -m src.eval              # writes eval/results.md, eval/to_grade.csv
 python -m src.eval --llm-judge  # also adds an LLM-judged correctness score
 
+# 4b. Compare generation settings on identical (cached) retrieval;
+#     exact answers are auto-scored against eval/answer_patterns.json
+python -m src.eval_generation heldout A_v1r_full C_v3_sent
+
 # 5. Launch the UI
 streamlit run app.py
 ```
