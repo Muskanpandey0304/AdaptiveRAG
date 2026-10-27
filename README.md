@@ -209,6 +209,14 @@ the reranker now carries more of the off-topic refusals.
 | Off-topic questions refused | 11 / 12 | 12 / 12 | 12 / 12 |
 | Mean latency | ~21 s | 27.6 s | 23.1 s |
 
+**Generator size (held-out, same retrieval):** swapping `llama3.2:3b` for
+`llama3.1:8b` (set `LLM_MODEL`) gave 24 / 27 correct vs 22 / 27, 12 / 12 off-topic
+still refused, and no literal `[n]` citations; mean latency 23 s -> 42 s (p95
+38 s -> 81 s). It fixed two answers; the three remaining misses are the same
+kind as before (two gate/refusal cases, one wrong fact), so the 8B model is an
+option for accuracy, not a fix for the reranker-gate refusals. Dev was not run
+with the 8B model.
+
 The third column was run with the title change (see below). Correctness was graded
 by an AI session, not by hand; on 27 questions one answer is about 4 points, so
 read 16 -> 19 -> 22 as a consistent trend, not a proven 81%.
