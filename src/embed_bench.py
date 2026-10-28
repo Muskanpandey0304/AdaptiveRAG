@@ -92,8 +92,8 @@ def evaluate_model(model_name: str, children: list[dict], parents: list[dict], b
         centroid_sims = q_vecs @ centroid
 
         vector_ranks, hybrid_ranks = [], []
-        top_cos = {"scoped": [], "general": []}
-        centroid_cos = {"scoped": [], "general": []}
+        top_cos: dict[str, list[float]] = {"scoped": [], "general": []}
+        centroid_cos: dict[str, list[float]] = {"scoped": [], "general": []}
         for i, question in enumerate(questions):
             order = np.argsort(sims[i])[::-1][:CANDIDATES_K]
             kind = "general" if question["type"] == "general" else "scoped"

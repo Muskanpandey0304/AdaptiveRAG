@@ -15,6 +15,8 @@ import pytest
 from src.indexer import build_vector_index, compute_centroid
 from src.retrievers import Hit, Retriever, _fuse_rrf
 
+pytestmark = pytest.mark.slow  # builds a real embedding index (downloads the model)
+
 
 def _chunks() -> list[dict]:
     topics = [
@@ -161,7 +163,7 @@ def _parent_child_retriever(tmp_path) -> Retriever:
         {"id": 2, "text": "Gamma one. Gamma two.", "source": "a.pdf", "page": 2, "parent_id": 1},
         {"id": 3, "text": "Delta one. Delta two.", "source": "a.pdf", "page": 2, "parent_id": 1},
     ]
-    retriever = _build_retriever(tmp_path, children)
+    _build_retriever(tmp_path, children)
     with open(tmp_path / "parents.json", "w", encoding="utf-8") as f:
         json.dump(parents, f)
     return Retriever(

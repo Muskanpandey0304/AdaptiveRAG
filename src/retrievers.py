@@ -18,7 +18,15 @@ from src.config import (
     SENTENCE_TOP_N,
     SENTENCE_WINDOW,
 )
-from src.indexer import CENTROID_PATH, CHUNKS_PATH, FAISS_PATH, META_PATH, build_bm25_index, chunks_fingerprint, tokenize
+from src.indexer import (
+    CENTROID_PATH,
+    CHUNKS_PATH,
+    FAISS_PATH,
+    META_PATH,
+    build_bm25_index,
+    chunks_fingerprint,
+    tokenize,
+)
 from src.ingest import _split_sentences, contextualize
 
 

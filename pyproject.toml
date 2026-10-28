@@ -1,0 +1,30 @@
+[project]
+name = "adaptive-rag"
+version = "0.1.0"
+description = "From-scratch RAG over LLM-evaluation papers, with measured retrieval and generation choices."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: loads a real embedding/reranker model (downloads it on a fresh machine); skipped in CI with -m 'not slow'",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["venv", "data"]
+
+[tool.ruff.lint]
+# Errors, pyflakes, import order, and a few bug-prone patterns. Deliberately not
+# the whole rule set: the aim is a lint that passes and catches real mistakes.
+select = ["E", "F", "I", "B"]
+# E501: long lines are mostly comments and message strings, and no formatter is enforced.
+# B905: zip() lengths here are equal by construction. B023: test fakes close over a per-test list.
+ignore = ["E501", "B905", "B023"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+ignore_missing_imports = true
+check_untyped_defs = true

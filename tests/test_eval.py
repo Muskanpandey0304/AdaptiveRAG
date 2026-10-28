@@ -11,7 +11,7 @@ This file only tests the parts that are pure data processing.
 import csv
 
 import src.eval as eval_module
-from src.eval import TO_GRADE_PATH, _mean, _p95, hit_at_5, render_results_md, summarize_config, write_to_grade_csv
+from src.eval import _mean, _p95, hit_at_5, render_results_md, summarize_config, write_to_grade_csv
 from src.generator import Answer
 from src.pipeline import Result
 from src.retrievers import Hit

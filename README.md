@@ -64,6 +64,11 @@ source venv/bin/activate
 
 pip install -r requirements.txt
 
+# Checks (config in pyproject.toml; CI runs the same three)
+pip install ruff mypy
+ruff check . && mypy
+pytest -q -m "not slow"   # skips the tests that load a real embedding model; plain `pytest` runs all
+
 cp .env.example .env
 # then edit .env: set LLM_PROVIDER, LLM_MODEL, API_KEY (Ollama needs no key)
 ```

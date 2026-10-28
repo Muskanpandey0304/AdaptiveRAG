@@ -7,6 +7,7 @@ no real chunks.json yet to index.
 
 import faiss
 import numpy as np
+import pytest
 
 from src.indexer import build_bm25_index, build_vector_index, compute_centroid, tokenize
 
@@ -22,6 +23,7 @@ def test_tokenize_lowercases_and_extracts_word_chars() -> None:
     assert tokenize("Hello, World! v2.0") == ["hello", "world", "v2", "0"]
 
 
+@pytest.mark.slow
 def test_vector_index_size_matches_chunk_count() -> None:
     chunks = _chunks(6)
     index = build_vector_index(chunks)
@@ -34,6 +36,7 @@ def test_bm25_index_size_matches_chunk_count() -> None:
     assert len(bm25.doc_freqs) == len(chunks)
 
 
+@pytest.mark.slow
 def test_compute_centroid_is_unit_length_and_matches_embedding_dim() -> None:
     chunks = _chunks(6)
     index = build_vector_index(chunks)
@@ -42,6 +45,7 @@ def test_compute_centroid_is_unit_length_and_matches_embedding_dim() -> None:
     assert np.isclose(np.linalg.norm(centroid), 1.0, atol=1e-5)
 
 
+@pytest.mark.slow
 def test_compute_centroid_closer_to_on_topic_than_off_topic_query() -> None:
     """A sanity check that the centroid behaves like a topic signal: a
     query about the corpus's actual subject should be more similar to the
@@ -71,6 +75,7 @@ def test_compute_centroid_closer_to_on_topic_than_off_topic_query() -> None:
     assert np.dot(on_topic, centroid) > np.dot(off_topic, centroid)
 
 
+@pytest.mark.slow
 def test_indexes_round_trip_through_disk(tmp_path) -> None:
     """Saving and reloading each index should preserve its size."""
     chunks = _chunks(4)

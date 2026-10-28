@@ -1,0 +1,17 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      # CPU torch keeps the install small; the model-loading tests are marked slow and skipped here.
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements.txt ruff mypy
+      - run: ruff check .
+      - run: mypy
+      - run: pytest -q -m "not slow"

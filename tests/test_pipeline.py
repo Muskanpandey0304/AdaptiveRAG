@@ -18,6 +18,8 @@ from src.indexer import build_vector_index, compute_centroid
 from src.llm import LLMResult
 from src.retrievers import Retriever
 
+pytestmark = pytest.mark.slow  # builds a real embedding index (downloads the model)
+
 
 def _fastapi_chunks() -> list[dict]:
     topics = [

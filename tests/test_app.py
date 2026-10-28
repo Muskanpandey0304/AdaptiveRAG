@@ -19,6 +19,8 @@ from src.indexer import build_vector_index, compute_centroid
 from src.llm import LLMResult
 from src.retrievers import Retriever
 
+pytestmark = pytest.mark.slow  # builds a real embedding index (downloads the model)
+
 APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
 
 

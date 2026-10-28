@@ -45,9 +45,9 @@ def describe(values: list[float]) -> str:
 def evaluate(questions: list[dict]) -> dict:
     """Run every question through retrieval once and collect hits and scores."""
     retriever = _get_retriever()
-    outcomes = {"hybrid": [], "hybrid+rerank": []}
+    outcomes: dict[str, list[float]] = {"hybrid": [], "hybrid+rerank": []}
     by_type: dict[str, dict[str, list[float]]] = {}
-    scores = {"in_scope": {"rerank": [], "cosine": [], "centroid": []}, "off_topic": {"rerank": [], "cosine": [], "centroid": []}}
+    scores: dict[str, dict[str, list[float]]] = {"in_scope": {"rerank": [], "cosine": [], "centroid": []}, "off_topic": {"rerank": [], "cosine": [], "centroid": []}}
 
     for question in questions:
         text = question["question"]
