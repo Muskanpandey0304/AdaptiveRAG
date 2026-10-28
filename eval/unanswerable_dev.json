@@ -1,0 +1,101 @@
+[
+ {
+  "id": 201,
+  "question": "What score does GPT-5 achieve on MMLU?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: GPT-?5; MMLU"
+ },
+ {
+  "id": 202,
+  "question": "What Spearman correlation does BERTScore reach on the WMT22 metrics shared task?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: WMT ?22|WMT ?2022; BERTScore"
+ },
+ {
+  "id": 203,
+  "question": "What is GPT-4o's resolve rate on SWE-bench Lite?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: GPT-?4o; SWE-bench"
+ },
+ {
+  "id": 204,
+  "question": "What is the Elo rating of GPT-4o on Chatbot Arena?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: GPT-?4o; Chatbot Arena; Elo"
+ },
+ {
+  "id": 205,
+  "question": "What is the human accuracy on the HellaSwag test set for non-native English speakers?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: non-native; HellaSwag"
+ },
+ {
+  "id": 206,
+  "question": "How does Llama 3.1 compare to GPT-4 on the MATH dataset?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: Llama[ -]?3\\.1; MATH"
+ },
+ {
+  "id": 207,
+  "question": "What is the Brier score of the ARES confidence intervals?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: Brier; ARES"
+ },
+ {
+  "id": 208,
+  "question": "What batch size was used to train the BERTScore baseline in the HellaSwag paper?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: [Bb]atch size; BERTScore; HellaSwag"
+ },
+ {
+  "id": 209,
+  "question": "What is the inter-annotator agreement of the HaluEval human annotators for the QA task?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: inter-annotator|agreement; HaluEval"
+ },
+ {
+  "id": 210,
+  "question": "What is the Pearson correlation of G-Eval with human judgments on MT-Bench?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: G-EVAL|G-Eval; MT-?[Bb]ench; Pearson"
+ },
+ {
+  "id": 211,
+  "question": "What accuracy does LLaMA-2-70B reach on the MATH dataset in the original MATH paper?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: Llama|LLaMA; 70B; MATH dataset"
+ }
+]

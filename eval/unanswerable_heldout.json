@@ -1,0 +1,101 @@
+[
+ {
+  "id": 301,
+  "question": "How many parameters does the 405B version of Llama 3 have?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: 405B; Llama[ -]?3"
+ },
+ {
+  "id": 302,
+  "question": "How much carbon was emitted while fine-tuning SWE-Llama?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: carbon|CO2|kWh; SWE-Llama"
+ },
+ {
+  "id": 303,
+  "question": "How much does it cost in dollars to evaluate one RAG system with ARES using GPT-4?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: \\$ ?\\d|dollar; ARES"
+ },
+ {
+  "id": 304,
+  "question": "How many GPU-hours were needed to train the Prometheus evaluator?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: GPU[- ]hours; PROMETHEUS|Prometheus"
+ },
+ {
+  "id": 305,
+  "question": "What is Qwen2.5's accuracy on MMLU-Pro?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: Qwen ?2\\.5; MMLU-Pro"
+ },
+ {
+  "id": 306,
+  "question": "What learning rate was used to fine-tune the GPT-judge model in TruthfulQA?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: [Ll]earning rate; GPT-judge"
+ },
+ {
+  "id": 307,
+  "question": "What does the Ragas paper report as the cost per evaluated sample?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: cost per; Ragas"
+ },
+ {
+  "id": 308,
+  "question": "Which random seed was used to sample the 80 MT-bench questions?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: [Rr]andom seed|seed; MT-?bench"
+ },
+ {
+  "id": 309,
+  "question": "What hardware was used to run the HELM evaluation, and how long did it take?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: [Hh]ardware; HELM; GPU"
+ },
+ {
+  "id": 310,
+  "question": "Which prompt template does AlpacaEval use for pairwise comparisons against GPT-4o?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: AlpacaEval; GPT-?4o"
+ },
+ {
+  "id": 311,
+  "question": "What F1 score does SelfCheckGPT report on the TruthfulQA dataset?",
+  "type": "unanswerable",
+  "expected_answer": "Not found in the documents: the papers do not state this.",
+  "gold_source": null,
+  "gold_pages": null,
+  "check": "no single page of the corpus contains all of: SelfCheckGPT; TruthfulQA"
+ }
+]
