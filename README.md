@@ -480,6 +480,8 @@ machine, retrieval configs averaged ~17-25 s per question and the router ~21 s.
 
 ## Limitations
 
+- On questions that are on-topic but unanswerable from the papers, the 3B generator made up an answer for 3 of 22 (14%), by attaching a figure from a different paper to the subject asked about. Confidence scores cannot catch these (rerank 0.98-0.997), and neither a learned gate nor the number-grounding check helped; see DECISIONS.md.
+- Final re-run: held-out hit@5 0.93, 15/17 exact answers, 12/12 off-topic refused, 17 s mean latency; dev hit@5 0.84, 25/32 exact, 4/6 off-topic refused, 21.5 s. Conceptual answers have not been re-graded.
 - The automated test suite still runs against small synthetic fixtures
   (not the real corpus) for speed and determinism; the real corpus is
   only exercised by `python -m src.eval` and manual use.
