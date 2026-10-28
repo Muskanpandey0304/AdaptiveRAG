@@ -85,7 +85,7 @@ python -m src.ingest            # writes data/md/*.md, data/index/parents.json, 
 python -m src.convert           # (optional) just the PDF -> Markdown step
 
 # 2. Build the FAISS vector index and BM25 index over the child chunks
-python -m src.indexer           # writes data/index/faiss.index, bm25.pkl, centroid.npy, meta.json
+python -m src.indexer           # writes data/index/faiss.index, centroid.npy, meta.json (BM25 is rebuilt at load)
 
 # 3. Run the test suite
 pytest -v

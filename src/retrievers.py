@@ -1,7 +1,6 @@
 """Vector, BM25, and hybrid (RRF-fused) retrieval over the built indexes."""
 
 import json
-import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,7 +18,7 @@ from src.config import (
     SENTENCE_TOP_N,
     SENTENCE_WINDOW,
 )
-from src.indexer import BM25_PATH, CENTROID_PATH, CHUNKS_PATH, FAISS_PATH, META_PATH, tokenize
+from src.indexer import CENTROID_PATH, CHUNKS_PATH, FAISS_PATH, META_PATH, build_bm25_index, chunks_fingerprint, tokenize
 from src.ingest import _split_sentences, contextualize
 
 
@@ -67,7 +66,6 @@ class Retriever:
         self,
         chunks_path: Path = CHUNKS_PATH,
         faiss_path: Path = FAISS_PATH,
-        bm25_path: Path = BM25_PATH,
         centroid_path: Path = CENTROID_PATH,
         parents_path: Path | None = None,
         meta_path: Path | None = None,
@@ -77,7 +75,14 @@ class Retriever:
         # chunks_path (like parents_path) so test fixtures never see the real one.
         meta_path = Path(meta_path) if meta_path else Path(chunks_path).with_name(META_PATH.name)
         if meta_path.exists():
-            built_with = json.loads(meta_path.read_text(encoding="utf-8"))["embed_model"]
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            built_with = meta["embed_model"]
+            built_from = meta.get("chunks_sha256")  # absent in indexes built before this check
+            if built_from and built_from != chunks_fingerprint(chunks_path):
+                raise RuntimeError(
+                    f"{chunks_path} changed since the index was built, so the vector index no longer "
+                    "matches its chunks. Re-run `python -m src.indexer`."
+                )
             if built_with != EMBED_MODEL:
                 raise RuntimeError(
                     f"Index was built with {built_with!r} but EMBED_MODEL is {EMBED_MODEL!r}. "
@@ -93,8 +98,7 @@ class Retriever:
             with open(parents_path, encoding="utf-8") as f:
                 self.parents = json.load(f)
         self.faiss_index = faiss.read_index(str(faiss_path))
-        with open(bm25_path, "rb") as f:
-            self.bm25_index = pickle.load(f)
+        self.bm25_index = build_bm25_index(self.chunks)
 
         # Optional: indexes built before this feature existed won't have
         # one yet. centroid_similarity() raises a clear error rather than

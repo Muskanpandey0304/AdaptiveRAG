@@ -4,7 +4,6 @@ Built from small synthetic chunks -- data/raw/ is still empty, so there's
 no real chunks.json yet to index.
 """
 
-import pickle
 
 import faiss
 import numpy as np
@@ -82,13 +81,7 @@ def test_indexes_round_trip_through_disk(tmp_path) -> None:
     loaded_vector_index = faiss.read_index(str(faiss_path))
     assert loaded_vector_index.ntotal == len(chunks)
 
-    bm25_index = build_bm25_index(chunks)
-    bm25_path = tmp_path / "bm25.pkl"
-    with open(bm25_path, "wb") as f:
-        pickle.dump(bm25_index, f)
-    with open(bm25_path, "rb") as f:
-        loaded_bm25 = pickle.load(f)
-    assert len(loaded_bm25.doc_freqs) == len(chunks)
+    assert len(build_bm25_index(chunks).doc_freqs) == len(chunks)
 
     centroid = compute_centroid(vector_index)
     centroid_path = tmp_path / "centroid.npy"

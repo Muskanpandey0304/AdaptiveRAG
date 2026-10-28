@@ -3,8 +3,8 @@
 Run as a script (`python -m src.indexer`) after `python -m src.ingest`.
 """
 
+import hashlib
 import json
-import pickle
 import re
 from pathlib import Path
 
@@ -13,14 +13,13 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
-from src.config import DOC_PREFIX, EMBED_MODEL
+from src.config import CHILD_OVERLAP, CHILD_TOKENS, CHUNK_OVERLAP, CHUNK_TOKENS, DOC_PREFIX, EMBED_MODEL
 from src.ingest import contextualize
 
 CHUNKS_PATH = Path("data/index/chunks.json")
 FAISS_PATH = Path("data/index/faiss.index")
-BM25_PATH = Path("data/index/bm25.pkl")
 CENTROID_PATH = Path("data/index/centroid.npy")
-META_PATH = Path("data/index/meta.json")  # which embedding model built the index
+META_PATH = Path("data/index/meta.json")  # what built the index (model, chunks hash, chunker settings)
 
 _TOKEN_RE = re.compile(r"\w+")
 
@@ -53,6 +52,12 @@ def build_vector_index(chunks: list[dict]) -> faiss.Index:
     index = faiss.IndexFlatIP(embeddings.shape[1])
     index.add(embeddings)
     return index
+
+
+def chunks_fingerprint(chunks_path: Path) -> str:
+    """SHA-256 of chunks.json. The vector index is positional, so it is only valid for
+    exactly the chunks it was built from; the retriever compares this to refuse a stale one."""
+    return hashlib.sha256(Path(chunks_path).read_bytes()).hexdigest()
 
 
 def build_bm25_index(chunks: list[dict]) -> BM25Okapi:
@@ -97,13 +102,18 @@ def main() -> None:
     centroid = compute_centroid(vector_index)
     np.save(CENTROID_PATH, centroid)
 
-    bm25_index = build_bm25_index(chunks)
-    with open(BM25_PATH, "wb") as f:
-        pickle.dump(bm25_index, f)
+    # BM25 is not saved: unpickling is fragile across rank_bm25 versions and unsafe
+    # for a file from elsewhere, and rebuilding from chunks.json takes about a second.
+    meta = {
+        "embed_model": EMBED_MODEL,
+        "n_chunks": len(chunks),
+        "chunks_sha256": chunks_fingerprint(CHUNKS_PATH),
+        "chunker": {"chunk_tokens": CHUNK_TOKENS, "chunk_overlap": CHUNK_OVERLAP,
+                    "child_tokens": CHILD_TOKENS, "child_overlap": CHILD_OVERLAP},
+    }
+    META_PATH.write_text(json.dumps(meta, indent=1), encoding="utf-8")
 
-    META_PATH.write_text(json.dumps({"embed_model": EMBED_MODEL, "n_chunks": len(chunks)}), encoding="utf-8")
-
-    print(f"Indexed {len(chunks)} chunks -> {FAISS_PATH}, {BM25_PATH}, {CENTROID_PATH}")
+    print(f"Indexed {len(chunks)} chunks -> {FAISS_PATH}, {CENTROID_PATH}, {META_PATH}")
 
 
 if __name__ == "__main__":

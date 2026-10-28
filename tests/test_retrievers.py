@@ -7,13 +7,12 @@ without real project documents.
 """
 
 import json
-import pickle
 
 import faiss
 import numpy as np
 import pytest
 
-from src.indexer import build_bm25_index, build_vector_index, compute_centroid
+from src.indexer import build_vector_index, compute_centroid
 from src.retrievers import Hit, Retriever, _fuse_rrf
 
 
@@ -34,7 +33,6 @@ def _chunks() -> list[dict]:
 def _build_retriever(tmp_path, chunks: list[dict], with_centroid: bool = True) -> Retriever:
     chunks_path = tmp_path / "chunks.json"
     faiss_path = tmp_path / "faiss.index"
-    bm25_path = tmp_path / "bm25.pkl"
     centroid_path = tmp_path / "centroid.npy"
 
     with open(chunks_path, "w", encoding="utf-8") as f:
@@ -42,12 +40,10 @@ def _build_retriever(tmp_path, chunks: list[dict], with_centroid: bool = True) -
 
     vector_index = build_vector_index(chunks)
     faiss.write_index(vector_index, str(faiss_path))
-    with open(bm25_path, "wb") as f:
-        pickle.dump(build_bm25_index(chunks), f)
     if with_centroid:
         np.save(centroid_path, compute_centroid(vector_index))
 
-    return Retriever(chunks_path=chunks_path, faiss_path=faiss_path, bm25_path=bm25_path, centroid_path=centroid_path)
+    return Retriever(chunks_path=chunks_path, faiss_path=faiss_path, centroid_path=centroid_path)
 
 
 @pytest.fixture(scope="module")
@@ -171,7 +167,6 @@ def _parent_child_retriever(tmp_path) -> Retriever:
     return Retriever(
         chunks_path=tmp_path / "chunks.json",
         faiss_path=tmp_path / "faiss.index",
-        bm25_path=tmp_path / "bm25.pkl",
         centroid_path=tmp_path / "centroid.npy",
     )
 
@@ -242,3 +237,41 @@ def test_query_is_embedded_once_across_vector_search_and_centroid_check(retrieve
     assert len(calls) == 1
     retriever.vector_search("a different question", 3)
     assert len(calls) == 2
+
+
+def _write_meta(tmp_path, **fields) -> None:
+    from src.config import EMBED_MODEL
+
+    meta = {"embed_model": EMBED_MODEL, **fields}
+    (tmp_path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+
+def _reload(tmp_path) -> Retriever:
+    return Retriever(
+        chunks_path=tmp_path / "chunks.json", faiss_path=tmp_path / "faiss.index", centroid_path=tmp_path / "centroid.npy"
+    )
+
+
+def test_loads_when_chunks_hash_matches(tmp_path) -> None:
+    from src.indexer import chunks_fingerprint
+
+    _build_retriever(tmp_path, _chunks())
+    _write_meta(tmp_path, chunks_sha256=chunks_fingerprint(tmp_path / "chunks.json"))
+    assert len(_reload(tmp_path).chunks) == len(_chunks())
+
+
+def test_refuses_index_whose_chunks_changed(tmp_path) -> None:
+    from src.indexer import chunks_fingerprint
+
+    _build_retriever(tmp_path, _chunks())
+    _write_meta(tmp_path, chunks_sha256=chunks_fingerprint(tmp_path / "chunks.json"))
+    (tmp_path / "chunks.json").write_text(json.dumps(_chunks()[:-1]), encoding="utf-8")  # re-ingested, not re-indexed
+    with pytest.raises(RuntimeError, match="changed since the index was built"):
+        _reload(tmp_path)
+
+
+def test_refuses_index_built_with_another_embedding_model(tmp_path) -> None:
+    _build_retriever(tmp_path, _chunks())
+    (tmp_path / "meta.json").write_text(json.dumps({"embed_model": "some/other-model"}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="some/other-model"):
+        _reload(tmp_path)
