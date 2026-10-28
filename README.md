@@ -483,6 +483,27 @@ retrieves). **Latency note:** the old run's latency numbers were distorted by
 memory pressure from other applications; in the later runs on an otherwise idle
 machine, retrieval configs averaged ~17-25 s per question and the router ~21 s.
 
+## 3B vs 8B generator (measured trade-off)
+
+Same retrieved context for both models (cached hits, reranker title on), default prompt `v1r` and adaptive
+context. Exact-answer questions are scored automatically against the regex keys in `eval/answer_patterns.json`;
+conceptual answers were not graded for this comparison.
+
+| Set | Model | Exact correct | Refusals | Literal "[n]" citations | Mean latency | Mean tokens out |
+|---|---|---|---|---|---|---|
+| Dev (49 in-scope) | llama3.2:3b | 26/32 | 1 | 9 | 18.8 s | 130 |
+| Dev (49 in-scope) | llama3.1:8b | 30/32 | 1 | 1 | 42.4 s | 78 |
+| Held-out (27 in-scope) | llama3.2:3b | 15/17 | 1 | 5 | 13.9 s | 98 |
+| Held-out (27 in-scope) | llama3.1:8b | 16/17 | 2 | 0 | 32.2 s | 57 |
+| **Both sets (49 keyed)** | 3B / 8B | **41 / 46** | | | **~2.3x slower** | |
+
+On the 49 keyed questions the 8B model answers 5 more correctly (it is right where the 3B is wrong on 6, and the
+reverse on 1); an exact McNemar test gives p = 0.125, so this is a suggestive gain, not a proven one. It also
+copies the prompt's "[n]" placeholder citation far less often (15 -> 1) and writes shorter answers. The cost is
+about 2.3x the latency on this laptop (GTX 1650, 4 GB), where most of the 8B model runs on CPU. The 3B model
+stays the default because a 14-19 s answer is usable interactively and 32-42 s is not; set `LLM_MODEL=llama3.1:8b`
+(or `--model` in the generation harness) when accuracy matters more than speed. No API model was compared.
+
 ## Limitations
 
 - On questions that are on-topic but unanswerable from the papers, the 3B generator made up an answer for 3 of 22 (14%), by attaching a figure from a different paper to the subject asked about. Confidence scores cannot catch these (rerank 0.98-0.997), and neither a learned gate nor the number-grounding check helped; see DECISIONS.md.
