@@ -13,11 +13,12 @@ Conceptual questions have no key and are left for hand grading.
 Usage:
     python -m src.eval_generation dev A_v1r_full B_v3_full
     python -m src.eval_generation heldout A_v1r_full C_v3_sent
-To compare models, run it twice with a different LLM_MODEL env var (the model
-is read once at import, so it can't change between variants in one run).
+To compare models, pass --model (e.g. --model llama3.1:8b); each run takes its
+settings as an argument, so nothing global is mutated.
 """
 
 import argparse
+import dataclasses
 import json
 import pickle
 import re
@@ -35,16 +36,16 @@ OUT_DIR = Path("eval/generation")
 # Variant name -> config overrides applied before generating. These are the
 # settings compared in the "Getting more out of the 3B model" README section.
 VARIANTS: dict[str, dict] = {
-    "A_v1r_full": dict(PROMPT_VERSION="v1r", CONTEXT_MODE="full", GROUNDING_CHECK=False),
-    "B_v3_full": dict(PROMPT_VERSION="v3", CONTEXT_MODE="full", GROUNDING_CHECK=False),
-    "C_v3_sent": dict(PROMPT_VERSION="v3", CONTEXT_MODE="sentences", GROUNDING_CHECK=False),
-    "D_v3_sent_ground": dict(PROMPT_VERSION="v3", CONTEXT_MODE="sentences", GROUNDING_CHECK=True),
-    "E_v1r_sent": dict(PROMPT_VERSION="v1r", CONTEXT_MODE="sentences", GROUNDING_CHECK=False),
-    "F_v3_full_ground": dict(PROMPT_VERSION="v3", CONTEXT_MODE="full", GROUNDING_CHECK=True),
-    "G_v1r_auto": dict(PROMPT_VERSION="v1r", CONTEXT_MODE="auto", GROUNDING_CHECK=False),
+    "A_v1r_full": dict(prompt_version="v1r", context_mode="full", grounding_check=False),
+    "B_v3_full": dict(prompt_version="v3", context_mode="full", grounding_check=False),
+    "C_v3_sent": dict(prompt_version="v3", context_mode="sentences", grounding_check=False),
+    "D_v3_sent_ground": dict(prompt_version="v3", context_mode="sentences", grounding_check=True),
+    "E_v1r_sent": dict(prompt_version="v1r", context_mode="sentences", grounding_check=False),
+    "F_v3_full_ground": dict(prompt_version="v3", context_mode="full", grounding_check=True),
+    "G_v1r_auto": dict(prompt_version="v1r", context_mode="auto", grounding_check=False),
     # G is the current default (v1r + adaptive context); H changes only the
     # citation sentence of the prompt (v1c), so G vs H isolates that sentence.
-    "H_v1c_auto": dict(PROMPT_VERSION="v1c", CONTEXT_MODE="auto", GROUNDING_CHECK=False),
+    "H_v1c_auto": dict(prompt_version="v1c", context_mode="auto", grounding_check=False),
 }
 
 NOT_FOUND_ANSWERS = {"NOT_FOUND", pipeline.NOT_FOUND_TEXT}
@@ -75,13 +76,21 @@ def cached_hits(dataset: str, questions: list[dict]) -> dict[int, list]:
     return hits_by_id
 
 
-def run_variant(name: str, questions: list[dict], hits_by_id: dict[int, list]) -> dict[int, dict]:
+def variant_settings(name: str, model: str | None = None) -> config.Settings:
+    """The defaults with this variant's overrides (and optionally another model) applied."""
+    base = config.Settings.from_config()
+    overrides = dict(VARIANTS[name], **({"llm_model": model} if model else {}))
+    return dataclasses.replace(base, **overrides)
+
+
+def run_variant(
+    name: str, questions: list[dict], hits_by_id: dict[int, list], model: str | None = None
+) -> dict[int, dict]:
     """Generate an answer for every question under one variant's settings."""
-    for key, value in VARIANTS[name].items():
-        setattr(config, key, value)
+    settings = variant_settings(name, model)
     results = {}
     for q in questions:
-        answer = pipeline._generate_answer(q["question"], hits_by_id[q["id"]])
+        answer = pipeline._generate_answer(q["question"], hits_by_id[q["id"]], settings)
         results[q["id"]] = {
             "text": answer.text,
             "n_citations": len(answer.citations),
@@ -118,18 +127,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compare generation variants on cached retrieval.")
     parser.add_argument("dataset", choices=list(QUESTION_FILES))
     parser.add_argument("variants", nargs="+", choices=list(VARIANTS))
+    parser.add_argument("--model", default=None, help="Ollama model for this run (default: LLM_MODEL)")
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     questions = load_in_scope(args.dataset)
     hits_by_id = cached_hits(args.dataset, questions)
     patterns = json.loads(PATTERNS_PATH.read_text(encoding="utf-8"))
-    print(f"{args.dataset}: {len(questions)} in-scope questions, model {config.LLM_MODEL}", flush=True)
+    print(f"{args.dataset}: {len(questions)} in-scope questions, model {args.model or config.LLM_MODEL}", flush=True)
 
     for name in args.variants:
         start = time.time()
-        results = run_variant(name, questions, hits_by_id)
-        out_path = OUT_DIR / f"{args.dataset}_{config.LLM_MODEL.replace(':', '-')}_{name}.json"
+        results = run_variant(name, questions, hits_by_id, args.model)
+        out_path = OUT_DIR / f"{args.dataset}_{(args.model or config.LLM_MODEL).replace(':', '-')}_{name}.json"
         out_path.write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8")
         print(f"{name} ({time.time() - start:.0f}s): {summarize(results, patterns)} -> {out_path}", flush=True)
 

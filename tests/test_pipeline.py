@@ -90,7 +90,7 @@ def wide_synthetic_retriever(tmp_path, monkeypatch) -> Retriever:
 
 
 def test_expand_neighbors_adds_hits_beyond_top_k(wide_synthetic_retriever, monkeypatch) -> None:
-    def fake_generate(prompt: str, system: str | None = None) -> LLMResult:
+    def fake_generate(prompt: str, system: str | None = None, model: str | None = None) -> LLMResult:
         return LLMResult(text="Some answer [1].", input_tokens=1, output_tokens=1, latency_s=0.01)
 
     monkeypatch.setattr("src.generator.generate", fake_generate)
@@ -136,7 +136,7 @@ def test_centroid_gate_catches_a_decoy_chunk_despite_high_per_chunk_confidence(d
 
 
 def test_force_route_direct_bypasses_router(monkeypatch) -> None:
-    def fake_generate(prompt: str, system: str | None = None) -> LLMResult:
+    def fake_generate(prompt: str, system: str | None = None, model: str | None = None) -> LLMResult:
         return LLMResult(text="Hi!", input_tokens=1, output_tokens=1, latency_s=0.01)
 
     monkeypatch.setattr("src.generator.generate", fake_generate)
@@ -166,7 +166,7 @@ def test_rerank_sees_a_wider_pool_than_top_k(wide_synthetic_retriever, monkeypat
     monkeypatch.setattr("src.pipeline.RERANK_MIN_PROB", 0.0)
     monkeypatch.setattr(
         "src.generator.generate",
-        lambda prompt, system=None: LLMResult(text="ok [1]", input_tokens=1, output_tokens=1, latency_s=0.0),
+        lambda prompt, system=None, model=None: LLMResult(text="ok [1]", input_tokens=1, output_tokens=1, latency_s=0.0),
     )
 
     result = pipeline.ask("What ASGI server runs FastAPI?", force_route="hybrid", use_rerank=True)
@@ -184,7 +184,7 @@ def test_auto_context_mode_trims_lookups_but_not_explanations(synthetic_retrieve
     monkeypatch.setattr(synthetic_retriever, "select_sentences", lambda q, h: (calls.append(q), real(q, h))[1])
     monkeypatch.setattr(
         "src.generator.generate",
-        lambda p, system=None, schema=None: LLMResult(text="ok [1]", input_tokens=1, output_tokens=1, latency_s=0.0),
+        lambda p, system=None, model=None, schema=None: LLMResult(text="ok [1]", input_tokens=1, output_tokens=1, latency_s=0.0),
     )
     hits = synthetic_retriever.vector_search("ASGI server FastAPI", 3)
 

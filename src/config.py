@@ -8,6 +8,7 @@ Two kinds of settings live here:
 """
 
 import os
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
@@ -190,3 +191,29 @@ RERANK_MIN_PROB = 0.5
 # than it was and the reranker carries more of the off-topic refusals.
 # 0.82 answers 98% of dev and 100% of held-out scoped questions.
 CENTROID_MIN_SIM = 0.82
+
+
+@dataclass(frozen=True)
+class Settings:
+    """The generation choices that vary between runs, as one immutable value.
+
+    `ask()` and the generator take one of these instead of reading module
+    globals, so an A/B run (or a test) passes the variant it wants rather than
+    mutating shared state, and one process can compare models. `from_config()`
+    reads the module constants when called, so env vars and monkeypatching
+    still set the defaults.
+    """
+
+    llm_model: str
+    prompt_version: str
+    context_mode: str
+    grounding_check: bool
+
+    @classmethod
+    def from_config(cls) -> "Settings":
+        return cls(
+            llm_model=LLM_MODEL,
+            prompt_version=PROMPT_VERSION,
+            context_mode=CONTEXT_MODE,
+            grounding_check=GROUNDING_CHECK,
+        )

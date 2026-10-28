@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from src import config
+from src.config import Settings
 from src.ingest import contextualize
 from src.llm import LLMResult, generate
 from src.retrievers import Hit
@@ -183,10 +183,10 @@ def _structured_reply(result: LLMResult) -> LLMResult | None:
     return LLMResult(text=text, input_tokens=result.input_tokens, output_tokens=result.output_tokens, latency_s=result.latency_s)
 
 
-def _generate_text(prompt: str, version: str) -> LLMResult:
+def _generate_text(prompt: str, version: str, model: str | None = None) -> LLMResult:
     """One generation in the style of `version` ("v1", "v1r", "v1c", "v2" or "v3")."""
     if version == "v3":
-        raw = generate(prompt, system=_STRUCTURED_SYSTEM_PROMPT, schema=_ANSWER_SCHEMA)
+        raw = generate(prompt, system=_STRUCTURED_SYSTEM_PROMPT, schema=_ANSWER_SCHEMA, model=model)
         parsed = _structured_reply(raw)
         if parsed is not None:
             return parsed
@@ -196,34 +196,37 @@ def _generate_text(prompt: str, version: str) -> LLMResult:
         raw_cost = None
 
     system = {"v2": _CONTEXT_SYSTEM_PROMPT_V2, "v1c": _CONTEXT_SYSTEM_PROMPT_V1C}.get(version, _CONTEXT_SYSTEM_PROMPT)
-    result = generate(prompt, system=system)
+    result = generate(prompt, system=system, model=model)
     # "v1r" = original prompt + the retry; "v2" = new prompt + the retry. A
     # citation-only reply is never a correct answer, so retrying it can't cost
     # accuracy, and it leaves the original prompt's refusal behavior alone.
     if version in ("v1r", "v1c", "v2") and not has_answer_text(result.text) and not is_not_found(result.text):
-        result = _sum_cost(result, generate(prompt + _RETRY_SUFFIX, system=system))
+        result = _sum_cost(result, generate(prompt + _RETRY_SUFFIX, system=system, model=model))
     return _sum_cost(raw_cost, result) if raw_cost is not None else result
 
 
-def answer_with_context(query: str, hits: list[Hit], full_hits: list[Hit] | None = None) -> Answer:
+def answer_with_context(
+    query: str, hits: list[Hit], full_hits: list[Hit] | None = None, settings: Settings | None = None
+) -> Answer:
     """Answer `query` using only the given chunks as context, with citations.
 
     `full_hits`, if given, are the uncompressed parents `hits` were derived
     from (CONTEXT_MODE="sentences"); the number check is made against them so
     an answer isn't flagged for a figure that sits just outside the excerpt.
     """
-    version = config.PROMPT_VERSION
+    settings = settings or Settings.from_config()
+    version, model = settings.prompt_version, settings.llm_model
     prompt = _build_context_prompt(query, hits)
-    result = _generate_text(prompt, version)
+    result = _generate_text(prompt, version, model)
 
     ungrounded: list[str] = []
-    if config.GROUNDING_CHECK and not is_not_found(result.text):
+    if settings.grounding_check and not is_not_found(result.text):
         context_texts = [h.chunk["text"] for h in (full_hits or hits)]
         ungrounded = ungrounded_numbers(result.text, context_texts)
         if ungrounded:
             # Retry once, on the fuller context when we have it.
             retry_hits = full_hits or hits
-            retry = _generate_text(_build_context_prompt(query, retry_hits) + _GROUNDING_SUFFIX, version)
+            retry = _generate_text(_build_context_prompt(query, retry_hits) + _GROUNDING_SUFFIX, version, model)
             result = _sum_cost(result, retry)
             hits = retry_hits
             ungrounded = [] if is_not_found(result.text) else ungrounded_numbers(result.text, context_texts)

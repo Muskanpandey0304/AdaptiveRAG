@@ -10,7 +10,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from src import config
 from src.config import (
     BM25_MIN_SCORE,
     CANDIDATES_K,
@@ -19,6 +18,7 @@ from src.config import (
     RERANK_POOL_K,
     TOP_K,
     VECTOR_MIN_SIM,
+    Settings,
 )
 from src.generator import Answer, answer_direct, answer_with_context, is_not_found
 from src.retrievers import Hit, Retriever
@@ -85,20 +85,23 @@ def _expand_if_enabled(hits: list[Hit], expand_neighbors: bool) -> list[Hit]:
     return _get_retriever().expand_neighbors(hits, window=1)
 
 
-def _generate_answer(query: str, hits: list[Hit]) -> Answer:
+def _generate_answer(query: str, hits: list[Hit], settings: Settings | None = None) -> Answer:
     """Generate from `hits`, shrinking them to their best sentences first when
     CONTEXT_MODE is "sentences". The full parents stay available to the
     generator's number check, and `result.hits` still reports the full parents."""
+    settings = settings or Settings.from_config()
     llm_hits = hits
-    use_sentences = config.CONTEXT_MODE == "sentences" or (
-        config.CONTEXT_MODE == "auto" and is_factoid_question(query)
+    use_sentences = settings.context_mode == "sentences" or (
+        settings.context_mode == "auto" and is_factoid_question(query)
     )
     if use_sentences and hits:
         llm_hits = _get_retriever().select_sentences(query, hits)
-    return _normalize_not_found(answer_with_context(query, llm_hits, full_hits=hits))
+    return _normalize_not_found(answer_with_context(query, llm_hits, full_hits=hits, settings=settings))
 
 
-def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[Answer, float, float, list[Hit]]:
+def _run_hybrid(
+    query: str, use_rerank: bool, expand_neighbors: bool, settings: Settings | None = None
+) -> tuple[Answer, float, float, list[Hit]]:
     """Hybrid retrieval + generation. Shared by the hybrid route and by
     keyword-route escalation, since escalation *is* "run the hybrid flow".
 
@@ -123,10 +126,10 @@ def _run_hybrid(query: str, use_rerank: bool, expand_neighbors: bool) -> tuple[A
     if confidence < min_confidence or centroid_sim < CENTROID_MIN_SIM:
         return _not_found_answer(), confidence, centroid_sim, hits
     hits = _expand_if_enabled(hits, expand_neighbors)
-    return _generate_answer(query, hits), confidence, centroid_sim, hits
+    return _generate_answer(query, hits, settings), confidence, centroid_sim, hits
 
 
-def _run_vector(query: str, expand_neighbors: bool) -> tuple[Answer, float, float, list[Hit]]:
+def _run_vector(query: str, expand_neighbors: bool, settings: Settings | None = None) -> tuple[Answer, float, float, list[Hit]]:
     """Plain vector search then generate -- the Step 6 baseline, reachable
     via force_route="vector" so eval can compare the router against it.
     Searches CANDIDATES_K children, so TOP_K distinct parents are likely."""
@@ -138,7 +141,7 @@ def _run_vector(query: str, expand_neighbors: bool) -> tuple[Answer, float, floa
     if confidence < VECTOR_MIN_SIM or centroid_sim < CENTROID_MIN_SIM:
         return _not_found_answer(), confidence, centroid_sim, hits
     hits = _expand_if_enabled(hits, expand_neighbors)
-    return _generate_answer(query, hits), confidence, centroid_sim, hits
+    return _generate_answer(query, hits, settings), confidence, centroid_sim, hits
 
 
 def _log(result: Result, query: str) -> None:
@@ -165,6 +168,7 @@ def ask(
     force_route: str | None = None,
     use_rerank: bool = False,
     expand_neighbors: bool = False,
+    settings: Settings | None = None,
 ) -> Result:
     """Answer `query`, routing it automatically unless `force_route` is set.
 
@@ -187,6 +191,7 @@ def ask(
     per-chunk confidence check. Added post-spec: see DECISIONS.md.
     """
     start = time.perf_counter()
+    settings = settings or Settings.from_config()
 
     if force_route is not None:
         chosen_route, reason, escalated = force_route, "forced", False
@@ -207,7 +212,7 @@ def ask(
         confidence = hits[0].score if hits else 0.0
         if force_route is None and confidence < BM25_MIN_SCORE:
             escalated = True
-            answer, confidence, centroid_sim, hits = _run_hybrid(query, use_rerank, expand_neighbors)
+            answer, confidence, centroid_sim, hits = _run_hybrid(query, use_rerank, expand_neighbors, settings)
         else:
             # BM25's literal keyword matching is exactly what let an
             # off-topic query match a corpus's own example Q&A/benchmark
@@ -219,13 +224,13 @@ def ask(
                 answer = _not_found_answer()
             else:
                 hits = _expand_if_enabled(hits, expand_neighbors)
-                answer = _generate_answer(query, hits)
+                answer = _generate_answer(query, hits, settings)
 
     elif chosen_route == "vector":
-        answer, confidence, centroid_sim, hits = _run_vector(query, expand_neighbors)
+        answer, confidence, centroid_sim, hits = _run_vector(query, expand_neighbors, settings)
 
     else:  # "hybrid"
-        answer, confidence, centroid_sim, hits = _run_hybrid(query, use_rerank, expand_neighbors)
+        answer, confidence, centroid_sim, hits = _run_hybrid(query, use_rerank, expand_neighbors, settings)
 
     latency_s = time.perf_counter() - start
     result = Result(

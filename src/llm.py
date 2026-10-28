@@ -38,19 +38,22 @@ class LLMResult:
     latency_s: float
 
 
-def generate(prompt: str, system: str | None = None, schema: dict | None = None) -> LLMResult:
+def generate(
+    prompt: str, system: str | None = None, schema: dict | None = None, model: str | None = None
+) -> LLMResult:
     """Call the configured LLM once and return its answer plus call stats.
 
     `schema`, if given, is a JSON schema the reply must follow (Ollama's
-    structured output); the reply text is then a JSON string."""
+    structured output); the reply text is then a JSON string. `model` overrides
+    LLM_MODEL for this call."""
     if LLM_PROVIDER != "ollama":
         raise NotImplementedError(
             f"LLM_PROVIDER={LLM_PROVIDER!r} is not implemented; only 'ollama' is."
         )
-    return _generate_ollama(prompt, system, schema)
+    return _generate_ollama(prompt, system, schema, model or LLM_MODEL)
 
 
-def _generate_ollama(prompt: str, system: str | None, schema: dict | None = None) -> LLMResult:
+def _generate_ollama(prompt: str, system: str | None, schema: dict | None, model: str) -> LLMResult:
     """Send `prompt` to the local Ollama server and time the round trip.
 
     Retries once, only on connection errors and timeouts: a local Ollama
@@ -72,13 +75,13 @@ def _generate_ollama(prompt: str, system: str | None, schema: dict | None = None
     client = ollama.Client(timeout=LLM_TIMEOUT_S)
     try:
         start = time.perf_counter()
-        response = client.chat(model=LLM_MODEL, messages=messages, **kwargs)
+        response = client.chat(model=model, messages=messages, **kwargs)
     except _TRANSIENT_ERRORS:
         # Retry only connection hiccups and timeouts. Anything else (e.g. the
         # model isn't pulled) would fail identically, so it propagates at once.
         # Latency is timed per attempt, so a failed first try doesn't inflate it.
         start = time.perf_counter()
-        response = client.chat(model=LLM_MODEL, messages=messages, **kwargs)
+        response = client.chat(model=model, messages=messages, **kwargs)
     latency_s = time.perf_counter() - start
 
     return LLMResult(

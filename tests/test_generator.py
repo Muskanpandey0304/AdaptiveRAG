@@ -16,7 +16,7 @@ def _hit(chunk_id: int, text: str, source: str = "doc.pdf", page: int = 1) -> Hi
 def _fake_generate(text: str):
     """A stand-in for src.llm.generate that always returns `text`."""
 
-    def _generate(prompt: str, system: str | None = None) -> LLMResult:
+    def _generate(prompt: str, system: str | None = None, model: str | None = None) -> LLMResult:
         return LLMResult(text=text, input_tokens=10, output_tokens=5, latency_s=0.01)
 
     return _generate
@@ -96,7 +96,7 @@ def test_v2_retries_once_on_a_bare_citation_and_sums_cost(monkeypatch) -> None:
     replies = iter(["[1]", "It is 37.7% [1]."])
     calls = []
 
-    def fake(prompt, system=None):
+    def fake(prompt, system=None, model=None):
         calls.append(prompt)
         return LLMResult(text=next(replies), input_tokens=10, output_tokens=2, latency_s=1.0)
 
@@ -116,7 +116,7 @@ def test_v2_does_not_retry_a_real_answer_or_not_found(monkeypatch) -> None:
     for reply in ("Widgets are great [1].", "NOT_FOUND"):
         calls = []
 
-        def fake(prompt, system=None, _r=reply):
+        def fake(prompt, system=None, model=None, _r=reply):
             calls.append(1)
             return LLMResult(text=_r, input_tokens=1, output_tokens=1, latency_s=0.1)
 
@@ -129,7 +129,7 @@ def test_v1_never_retries(monkeypatch) -> None:
     monkeypatch.setattr("src.config.PROMPT_VERSION", "v1")
     calls = []
     real = _fake_generate("[1]")
-    monkeypatch.setattr("src.generator.generate", lambda p, system=None: (calls.append(1), real(p, system))[1])
+    monkeypatch.setattr("src.generator.generate", lambda p, system=None, model=None: (calls.append(1), real(p, system))[1])
     answer_with_context("q?", [_hit(1, "a widget fact")])
     assert len(calls) == 1
 
@@ -142,7 +142,7 @@ def test_v1r_retries_a_bare_citation_but_keeps_the_original_prompt(monkeypatch) 
     replies = iter(["[2]", "It is 37.7% [1]."])
     systems = []
 
-    def fake(prompt, system=None):
+    def fake(prompt, system=None, model=None):
         systems.append(system)
         return LLMResult(text=next(replies), input_tokens=5, output_tokens=1, latency_s=0.5)
 
@@ -164,7 +164,7 @@ def test_v3_turns_structured_json_into_text_with_real_citations(monkeypatch) -> 
     monkeypatch.setattr("src.config.PROMPT_VERSION", "v3")
     seen = {}
 
-    def fake(prompt, system=None, schema=None):
+    def fake(prompt, system=None, model=None, schema=None):
         seen["schema"] = schema
         return LLMResult(text=_json_reply(answer="It is 37.7%.", sources=[1]), input_tokens=3, output_tokens=2, latency_s=0.1)
 
@@ -180,7 +180,7 @@ def test_v3_found_false_becomes_not_found(monkeypatch) -> None:
     monkeypatch.setattr("src.config.PROMPT_VERSION", "v3")
     monkeypatch.setattr(
         "src.generator.generate",
-        lambda p, system=None, schema=None: LLMResult(text=_json_reply(found=False), input_tokens=1, output_tokens=1, latency_s=0.1),
+        lambda p, system=None, model=None, schema=None: LLMResult(text=_json_reply(found=False), input_tokens=1, output_tokens=1, latency_s=0.1),
     )
     answer = answer_with_context("q?", [_hit(1, "a widget fact")])
     assert answer.text == "NOT_FOUND" and answer.citations == []
@@ -191,7 +191,7 @@ def test_v3_falls_back_to_free_text_on_malformed_json(monkeypatch) -> None:
     replies = iter(["this is not json", "Plain answer [1]."])
     monkeypatch.setattr(
         "src.generator.generate",
-        lambda p, system=None, schema=None: LLMResult(text=next(replies), input_tokens=4, output_tokens=1, latency_s=0.5),
+        lambda p, system=None, model=None, schema=None: LLMResult(text=next(replies), input_tokens=4, output_tokens=1, latency_s=0.5),
     )
     answer = answer_with_context("q?", [_hit(1, "a widget fact")])
     assert answer.text == "Plain answer [1]."
@@ -214,7 +214,7 @@ def test_grounding_check_retries_once_on_a_wrong_number(monkeypatch) -> None:
     replies = iter(["It is 41.2% [1].", "It is 37.7% [1]."])
     prompts = []
 
-    def fake(prompt, system=None, schema=None):
+    def fake(prompt, system=None, model=None, schema=None):
         prompts.append(prompt)
         return LLMResult(text=next(replies), input_tokens=5, output_tokens=2, latency_s=1.0)
 
@@ -229,13 +229,13 @@ def test_grounding_check_retries_once_on_a_wrong_number(monkeypatch) -> None:
 def test_grounding_check_is_off_by_default_and_never_runs_on_refusals(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr("src.config.PROMPT_VERSION", "v1")
-    monkeypatch.setattr("src.generator.generate", lambda p, system=None, schema=None: (calls.append(1), LLMResult(text="It is 99.9% [1].", input_tokens=1, output_tokens=1, latency_s=0.1))[1])
+    monkeypatch.setattr("src.generator.generate", lambda p, system=None, model=None, schema=None: (calls.append(1), LLMResult(text="It is 99.9% [1].", input_tokens=1, output_tokens=1, latency_s=0.1))[1])
     answer_with_context("q?", [_hit(1, "no such number")])
     assert len(calls) == 1  # GROUNDING_CHECK defaults to off
 
     monkeypatch.setattr("src.config.GROUNDING_CHECK", True)
     calls.clear()
-    monkeypatch.setattr("src.generator.generate", lambda p, system=None, schema=None: (calls.append(1), LLMResult(text="NOT_FOUND", input_tokens=1, output_tokens=1, latency_s=0.1))[1])
+    monkeypatch.setattr("src.generator.generate", lambda p, system=None, model=None, schema=None: (calls.append(1), LLMResult(text="NOT_FOUND", input_tokens=1, output_tokens=1, latency_s=0.1))[1])
     answer_with_context("q?", [_hit(1, "x")])
     assert len(calls) == 1
 
@@ -259,7 +259,7 @@ def test_v1c_uses_its_own_prompt_and_keeps_the_bare_citation_retry(monkeypatch) 
     replies = iter(["[2]", "It is 37.7% [1]."])
     systems = []
 
-    def fake(prompt, system=None):
+    def fake(prompt, system=None, model=None):
         systems.append(system)
         return LLMResult(text=next(replies), input_tokens=5, output_tokens=1, latency_s=0.5)
 
@@ -268,3 +268,30 @@ def test_v1c_uses_its_own_prompt_and_keeps_the_bare_citation_retry(monkeypatch) 
 
     assert answer.text == "It is 37.7% [1]."
     assert systems == [_CONTEXT_SYSTEM_PROMPT_V1C, _CONTEXT_SYSTEM_PROMPT_V1C]
+
+
+def test_settings_choose_model_and_prompt_without_touching_config(monkeypatch) -> None:
+    from src.config import Settings
+
+    seen = {}
+
+    def fake(prompt, system=None, schema=None, model=None):
+        seen["model"], seen["system"] = model, system
+        return LLMResult(text="Fact [1].", input_tokens=1, output_tokens=1, latency_s=0.1)
+
+    monkeypatch.setattr("src.generator.generate", fake)
+    settings = Settings(llm_model="other-model", prompt_version="v2", context_mode="full", grounding_check=False)
+
+    answer_with_context("q?", [_hit(0, "text")], settings=settings)
+
+    assert seen["model"] == "other-model"
+    assert "complete sentences" in seen["system"]  # v2 prompt, not the default one
+
+
+def test_settings_default_to_the_module_config(monkeypatch) -> None:
+    from src.config import Settings
+
+    monkeypatch.setattr("src.config.PROMPT_VERSION", "v1c")
+    monkeypatch.setattr("src.config.LLM_MODEL", "m:1")
+    settings = Settings.from_config()
+    assert (settings.prompt_version, settings.llm_model) == ("v1c", "m:1")

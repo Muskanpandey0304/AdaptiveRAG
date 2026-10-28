@@ -28,7 +28,7 @@ def test_app_runs_direct_route_without_a_retriever(monkeypatch) -> None:
     """A greeting routes "direct" and never touches the retriever, so the
     app should render end to end with just the LLM mocked."""
 
-    def fake_generate(prompt: str, system: str | None = None) -> LLMResult:
+    def fake_generate(prompt: str, system: str | None = None, model: str | None = None) -> LLMResult:
         return LLMResult(text="Hello!", input_tokens=1, output_tokens=1, latency_s=0.01)
 
     monkeypatch.setattr("src.generator.generate", fake_generate)
@@ -88,7 +88,7 @@ def test_app_does_not_call_the_llm_again_when_a_widget_changes(monkeypatch) -> N
     """Regression: the old app reran the whole pipeline on every widget change."""
     calls = []
 
-    def fake_generate(prompt: str, system: str | None = None) -> LLMResult:
+    def fake_generate(prompt: str, system: str | None = None, model: str | None = None) -> LLMResult:
         calls.append(1)
         return LLMResult(text="Hello!", input_tokens=1, output_tokens=1, latency_s=0.01)
 

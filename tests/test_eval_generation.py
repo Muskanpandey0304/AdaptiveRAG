@@ -35,3 +35,12 @@ def test_every_answer_pattern_is_a_valid_regex_for_a_real_question() -> None:
         assert int(qid) in ids
         for p in pats:
             re.compile(p)
+
+
+def test_variant_settings_override_defaults_and_model() -> None:
+    from src.eval_generation import VARIANTS, variant_settings
+
+    settings = variant_settings("B_v3_full", model="llama3.1:8b")
+    assert settings.prompt_version == "v3" and settings.context_mode == "full"
+    assert settings.llm_model == "llama3.1:8b"
+    assert all(set(v) <= {"prompt_version", "context_mode", "grounding_check"} for v in VARIANTS.values())
