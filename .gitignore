@@ -12,3 +12,6 @@ eval/to_grade*.csv
 .claude/
 data/md/
 eval/generation/
+benchmarks/*/data/
+benchmarks/*/index/
+venv_gpu/
