@@ -325,6 +325,9 @@ It prints exact_correct, refusals, literal_n_citations and latency.
           or do 2.2 together with Step 3.1, which replaces it.
   Also:   Delete eval/generation/hits_*.pkl afterwards.
   Reject if: dev hit@5 with rerank drops.
+  STATUS: DONE, ADOPTED (RERANK_WITH_TITLE=1). Retrieval-only hit@5 with rerank:
+          dev 0.898 -> 0.939, held-out 0.926 -> 0.963. RERANK_MIN_PROB stays 0.5.
+          Full eval with it on: dev 27/32 exact, held-out 15/17, latency +2-3 s.
 
 2.3 Second chance when the model refuses but retrieval is confident
   Where:  src/pipeline.py, after _generate_answer() in _run_hybrid().
@@ -429,3 +432,9 @@ STEP 4 - MODEL CHOICES (decided; change only with new measurements)
   [ ] README results table has a new column; DECISIONS.md has one line per
       step, including rejected changes and their numbers.
   [ ] "things to improve.txt" items marked done or still open.
+
+LATER STATUS (Oct 2026): review items 10-15 are done (LLM hardening, query cache,
+UI fixes, BM25 rebuilt at load + stale-index check, frozen Settings object,
+pyproject/ruff/mypy/CI). Step 3.1 (learned gate) was tried and NOT adopted, and
+the grounding check does not catch cross-paper mix-ups; see DECISIONS.md.
+Not started: items 8 (GPU formulas), 9 (figure captions), 16-19.
