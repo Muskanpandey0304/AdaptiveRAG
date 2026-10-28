@@ -104,6 +104,11 @@ QUERY_PREFIX, DOC_PREFIX = EMBED_PREFIXES.get(EMBED_MODEL, ("", ""))
 # Cross-encoder reranker, used only when `use_rerank=True` in the pipeline.
 RERANK_MODEL = "BAAI/bge-reranker-base"
 
+# Prepend the paper title to the passage the reranker reads (see
+# Retriever.rerank). On: retrieval-only hit@5 with rerank rose dev 0.898 -> 0.939
+# and held-out 0.926 -> 0.963 (DECISIONS.md). RERANK_MIN_PROB was not changed.
+RERANK_WITH_TITLE: bool = os.getenv("RERANK_WITH_TITLE", "1") == "1"
+
 # --- Chunking ----------------------------------------------------------------
 
 # Target chunk size in (approximate) tokens, and overlap between consecutive

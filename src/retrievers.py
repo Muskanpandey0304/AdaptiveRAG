@@ -14,12 +14,13 @@ from src.config import (
     EMBED_MODEL,
     QUERY_PREFIX,
     RERANK_MODEL,
+    RERANK_WITH_TITLE,
     RRF_K,
     SENTENCE_TOP_N,
     SENTENCE_WINDOW,
 )
 from src.indexer import BM25_PATH, CENTROID_PATH, CHUNKS_PATH, FAISS_PATH, META_PATH, tokenize
-from src.ingest import _split_sentences
+from src.ingest import _split_sentences, contextualize
 
 
 @dataclass
@@ -332,7 +333,10 @@ class Retriever:
         """
         if not hits:
             return []
-        pairs = [(query, hit.chunk["text"]) for hit in hits]
+        # RERANK_WITH_TITLE: show the cross-encoder the paper title too, so it
+        # can tell which paper a passage is from (on by default, measured).
+        passage = contextualize if RERANK_WITH_TITLE else (lambda chunk: chunk["text"])
+        pairs = [(query, passage(hit.chunk)) for hit in hits]
         scores = self.reranker.predict(pairs)
         order = np.argsort(scores)[::-1][:k]
         return [
