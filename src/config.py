@@ -45,7 +45,7 @@ LLM_KEEP_ALIVE: str = os.getenv("LLM_KEEP_ALIVE", "10m")
 # The slowest answer seen is ~80 s on CPU with the 8B model.
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "180"))
 
-# Answer-prompt version for the generator ("v1", "v1r" or "v2"; see
+# Answer-prompt version for the generator ("v1", "v1r", "v1c" or "v2"; see
 # DECISIONS.md for the A/B). "v1" is the original prompt. "v1r" is v1 plus one
 # retry when the reply has no answer text (a 3B model often answers with just
 # "[1]"). "v2" is a reworded prompt (complete sentences, no citation-only

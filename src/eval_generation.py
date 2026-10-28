@@ -42,6 +42,9 @@ VARIANTS: dict[str, dict] = {
     "E_v1r_sent": dict(PROMPT_VERSION="v1r", CONTEXT_MODE="sentences", GROUNDING_CHECK=False),
     "F_v3_full_ground": dict(PROMPT_VERSION="v3", CONTEXT_MODE="full", GROUNDING_CHECK=True),
     "G_v1r_auto": dict(PROMPT_VERSION="v1r", CONTEXT_MODE="auto", GROUNDING_CHECK=False),
+    # G is the current default (v1r + adaptive context); H changes only the
+    # citation sentence of the prompt (v1c), so G vs H isolates that sentence.
+    "H_v1c_auto": dict(PROMPT_VERSION="v1c", CONTEXT_MODE="auto", GROUNDING_CHECK=False),
 }
 
 NOT_FOUND_ANSWERS = {"NOT_FOUND", pipeline.NOT_FOUND_TEXT}

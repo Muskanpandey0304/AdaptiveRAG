@@ -33,6 +33,19 @@ _CONTEXT_SYSTEM_PROMPT = (
     "If the context does not contain the answer, reply with exactly: NOT_FOUND"
 )
 
+# "v1c": v1 with ONE sentence changed. v1 says "the matching [n]", and the 3B
+# model sometimes copies "[n]" literally (7 of 46 answers in one run), which
+# leaves the answer with no parseable citation. "e.g. [2]" shows what a real
+# marker looks like. Everything else, including the NOT_FOUND sentence, is
+# word-for-word v1 so refusal behaviour is not disturbed (the fuller rewrite v2
+# loosened refusals).
+_CONTEXT_SYSTEM_PROMPT_V1C = (
+    "Answer the question using ONLY the numbered context blocks below. "
+    "After each claim, write the number of the supporting context block in square "
+    "brackets, e.g. [2]. "
+    "If the context does not contain the answer, reply with exactly: NOT_FOUND"
+)
+
 _CONTEXT_SYSTEM_PROMPT_V2 = (
     "Answer the question using ONLY the numbered context blocks below. "
     "Write your answer as one or more complete sentences that state the specific "
@@ -171,7 +184,7 @@ def _structured_reply(result: LLMResult) -> LLMResult | None:
 
 
 def _generate_text(prompt: str, version: str) -> LLMResult:
-    """One generation in the style of `version` ("v1", "v1r", "v2" or "v3")."""
+    """One generation in the style of `version` ("v1", "v1r", "v1c", "v2" or "v3")."""
     if version == "v3":
         raw = generate(prompt, system=_STRUCTURED_SYSTEM_PROMPT, schema=_ANSWER_SCHEMA)
         parsed = _structured_reply(raw)
@@ -182,12 +195,12 @@ def _generate_text(prompt: str, version: str) -> LLMResult:
     else:
         raw_cost = None
 
-    system = _CONTEXT_SYSTEM_PROMPT_V2 if version == "v2" else _CONTEXT_SYSTEM_PROMPT
+    system = {"v2": _CONTEXT_SYSTEM_PROMPT_V2, "v1c": _CONTEXT_SYSTEM_PROMPT_V1C}.get(version, _CONTEXT_SYSTEM_PROMPT)
     result = generate(prompt, system=system)
     # "v1r" = original prompt + the retry; "v2" = new prompt + the retry. A
     # citation-only reply is never a correct answer, so retrying it can't cost
     # accuracy, and it leaves the original prompt's refusal behavior alone.
-    if version in ("v1r", "v2") and not has_answer_text(result.text) and not is_not_found(result.text):
+    if version in ("v1r", "v1c", "v2") and not has_answer_text(result.text) and not is_not_found(result.text):
         result = _sum_cost(result, generate(prompt + _RETRY_SUFFIX, system=system))
     return _sum_cost(raw_cost, result) if raw_cost is not None else result
 

@@ -291,6 +291,21 @@ It prints exact_correct, refusals, literal_n_citations and latency.
           from corpus text), which is why only ONE sentence changes here.
   Reject if: refusals on dev in-scope rise, or off-topic refusals in a
           full eval drop below 12/12 (held-out) / the dev baseline.
+  STATUS: DONE, REJECTED AS DEFAULT (kept as opt-in PROMPT_VERSION=v1c).
+          Measured with src.eval_generation on cached retrieval, 3B model
+          (variants G_v1r_auto vs H_v1c_auto):
+            dev (49):      exact 25 -> 26/32, refusals 2 -> 3, literal [n]
+                           13 -> 0, parsed citations 27 -> 44
+            held-out (27): exact 15 -> 14/17, refusals 1 -> 3, literal [n]
+                           7 -> 0, parsed citations 16 -> 22
+          Exact differences are not significant (McNemar p = 1.0 both), but
+          refusals doubled (3 -> 6 of 76): #108 and #111 were answered
+          correctly by v1r and refused by v1c. The citation fix is real, the
+          refusal cost breaks the step's own rule, so v1r stays default.
+          If a citation fix is still wanted, try fixing it WITHOUT touching
+          the refusal wording, e.g. replace [n] by [1] only inside the
+          citation sentence (a new variant, measure the same way), or post-
+          process literal "[n]" answers; do not reword the NOT_FOUND part.
 
 2.2 Give the reranker the paper title
   Where:  src/retrievers.py Retriever.rerank():

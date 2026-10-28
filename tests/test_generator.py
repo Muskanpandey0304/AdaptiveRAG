@@ -238,3 +238,33 @@ def test_grounding_check_is_off_by_default_and_never_runs_on_refusals(monkeypatc
     monkeypatch.setattr("src.generator.generate", lambda p, system=None, schema=None: (calls.append(1), LLMResult(text="NOT_FOUND", input_tokens=1, output_tokens=1, latency_s=0.1))[1])
     answer_with_context("q?", [_hit(1, "x")])
     assert len(calls) == 1
+
+
+def test_v1c_differs_from_v1_only_in_the_citation_sentence() -> None:
+    """v1c must not disturb refusal behaviour: its NOT_FOUND sentence and opening are v1's."""
+    from src.generator import _CONTEXT_SYSTEM_PROMPT, _CONTEXT_SYSTEM_PROMPT_V1C
+
+    v1_open, _, v1_rest = _CONTEXT_SYSTEM_PROMPT.partition("Cite every claim")
+    assert _CONTEXT_SYSTEM_PROMPT_V1C.startswith(v1_open)
+    assert _CONTEXT_SYSTEM_PROMPT_V1C.endswith(v1_rest.split("[n]. ")[1])
+    assert "[n]" not in _CONTEXT_SYSTEM_PROMPT_V1C  # the placeholder the model copied
+    assert "e.g. [2]" in _CONTEXT_SYSTEM_PROMPT_V1C
+
+
+def test_v1c_uses_its_own_prompt_and_keeps_the_bare_citation_retry(monkeypatch) -> None:
+    from src.generator import _CONTEXT_SYSTEM_PROMPT_V1C
+    from src.llm import LLMResult
+
+    monkeypatch.setattr("src.config.PROMPT_VERSION", "v1c")
+    replies = iter(["[2]", "It is 37.7% [1]."])
+    systems = []
+
+    def fake(prompt, system=None):
+        systems.append(system)
+        return LLMResult(text=next(replies), input_tokens=5, output_tokens=1, latency_s=0.5)
+
+    monkeypatch.setattr("src.generator.generate", fake)
+    answer = answer_with_context("q?", [_hit(1, "a widget fact")])
+
+    assert answer.text == "It is 37.7% [1]."
+    assert systems == [_CONTEXT_SYSTEM_PROMPT_V1C, _CONTEXT_SYSTEM_PROMPT_V1C]
