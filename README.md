@@ -1,19 +1,39 @@
 # AdaptiveRAG
 
-A retrieval-augmented generation pipeline built from scratch — no LangChain,
-LlamaIndex, or Haystack. A router classifies each query *before* any
-retrieval happens, so cheap queries (greetings, arithmetic, "who are you")
-skip retrieval entirely, exact-lookup-shaped queries (ticket IDs, version
-numbers, file paths, quoted phrases) try BM25 first, and everything else
-goes through hybrid (BM25 + vector) search fused with Reciprocal Rank
-Fusion, with an optional cross-encoder reranking pass. A confidence
-threshold on the retrieval side means the pipeline says "Not found in the
-documents" instead of guessing when nothing relevant was actually retrieved.
+A question-answering system over a set of research papers that runs entirely on your own machine. You ask a question
+in plain English and it answers from the papers, cites where the answer came from, and says "Not found in the
+documents" instead of guessing when nothing relevant was retrieved. It is built from scratch, with no LangChain,
+LlamaIndex or Haystack, so each part (chunking, indexing, search, routing, confidence checks) can be read and explained.
 
-Built as a from-scratch learning project — every piece (chunking, FAISS/BM25
-indexing, RRF fusion, routing, confidence gating) is implemented directly
-with `sentence-transformers`, `faiss-cpu`, `rank_bm25`, and `docling` (PDF to
-Markdown), not a RAG framework, so each part is easy to point at and explain.
+The example corpus is 26 arXiv papers on evaluating language models (list in `data/papers.txt`), but any set of PDFs works.
+It runs on a laptop (tested on a GTX 1650 with 4 GB of memory) with a local model served by [Ollama](https://ollama.com),
+so no API key and no data leaves your computer.
+
+**How it works.** A router classifies each query *before* any retrieval happens. Cheap queries (greetings,
+arithmetic, "who are you") skip retrieval entirely, exact-lookup-shaped queries (ticket IDs, version numbers, file
+paths, quoted phrases) try BM25 first, and everything else goes through hybrid (BM25 + vector) search fused with
+Reciprocal Rank Fusion, with a cross-encoder reranking pass. A confidence threshold on the retrieval side makes the
+pipeline refuse instead of guess when nothing relevant was actually found. Papers are converted to Markdown with
+`docling`, split into small chunks that are searched and larger parent chunks that the model reads, and indexed with
+`sentence-transformers`, `faiss-cpu` and `rank_bm25`.
+
+**What this repo is good for:** seeing a complete RAG pipeline with honest measurements (confidence intervals, held-out
+questions, an outside benchmark, and a record of what was tried and did not work in `DECISIONS.md`), not a
+production service. It has no authentication or deployment hardening.
+
+## Quick start
+
+```bash
+py -3.10 -m venv venv && venv\Scripts\activate     # macOS/Linux: python3.10 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+ollama pull llama3.2:3b                            # install Ollama first
+cp .env.example .env                               # then set LLM_MODEL=llama3.2:3b in .env (copy on Windows: copy .env.example .env)
+python -m src.download_papers                      # fetches the 26 papers into data/raw/
+python -m src.ingest && python -m src.indexer      # PDF -> Markdown -> chunks -> indexes (Markdown conversion took about 1.3 hours on CPU)
+streamlit run app.py                               # ask questions in the browser
+```
+
+Full setup, the individual steps and how to reproduce every number are below.
 
 ## Results at a glance
 
