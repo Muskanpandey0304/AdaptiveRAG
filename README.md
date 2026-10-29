@@ -15,6 +15,26 @@ indexing, RRF fusion, routing, confidence gating) is implemented directly
 with `sentence-transformers`, `faiss-cpu`, `rank_bm25`, and `docling` (PDF to
 Markdown), not a RAG framework, so each part is easy to point at and explain.
 
+## Results at a glance
+
+Local, from-scratch RAG over 26 LLM-evaluation papers (8,181 chunks), running on a laptop (GTX 1650, 3B model).
+Every number is reproducible from a script in this repo; details and caveats are in the sections below and in
+`DECISIONS.md`.
+
+| What | Result | How it was measured |
+|---|---|---|
+| Finds the right page (hit@5) | 0.88 dev, 0.93 held-out | 49 + 27 questions, 95% bootstrap CIs |
+| Single-fact answers correct | 27/32 dev, 15/17 held-out | Regex answer keys, automatic |
+| Held-out in-scope correct, before -> after the Markdown/e5/title rebuild | about 16/27 -> 22-23/27 | AI-graded (not human) |
+| Off-topic questions refused | 12/12 held-out, 4/6 dev | Automatic |
+| On-topic but unanswerable questions refused | 20/22 | 22 hard negatives; the 3B model still invents an answer for about 3 in 22 |
+| 3B vs 8B generator | 41 vs 46 of 49 exact answers, 8B about 2.3x slower | Same retrieved context, p = 0.125 |
+| Outside benchmark: SciFact (BEIR) retrieval | nDCG@10 0.730, Recall@10 0.867 | 5,183 abstracts, 300 claims, no tuning |
+| Speed | 14-25 s per answer (3B) | Mean over the eval sets |
+
+Known limits: small test sets (most differences are within noise), cross-paper mix-ups by the small model,
+formulas and figures not searchable, conceptual answers graded by an AI session rather than a person.
+
 ## Architecture
 
 ```mermaid
@@ -503,6 +523,27 @@ copies the prompt's "[n]" placeholder citation far less often (15 -> 1) and writ
 about 2.3x the latency on this laptop (GTX 1650, 4 GB), where most of the 8B model runs on CPU. The 3B model
 stays the default because a 14-19 s answer is usable interactively and 32-42 s is not; set `LLM_MODEL=llama3.1:8b`
 (or `--model` in the generation harness) when accuracy matters more than speed. No API model was compared.
+
+## External benchmark: SciFact (BEIR)
+
+To check the retrieval stack is not just tuned to our own 94 questions, `benchmarks/scifact/` runs it on SciFact
+from the BEIR collection: 5,183 scientific abstracts and 300 test claims, each with expert-labelled relevant
+abstracts. It scores retrieval only (no LLM), with the same components and settings as the main pipeline
+(e5-base-v2, BM25, RRF, bge-reranker-base); the abstracts are short, so they are indexed whole, not chunked.
+
+| Method | nDCG@10 | 95% CI | Recall@10 |
+|---|---|---|---|
+| BM25 | 0.652 | [0.605, 0.697] | 0.774 |
+| Dense (e5-base-v2) | 0.719 | [0.678, 0.759] | 0.846 |
+| Hybrid (RRF) | 0.727 | [0.686, 0.767] | 0.864 |
+| Hybrid + rerank | 0.730 | [0.689, 0.769] | 0.867 |
+
+Dense beats BM25 by about 7 nDCG points and fusing them adds a little, the same ordering as on our own papers.
+Unlike on our papers, the reranker adds almost nothing here (0.727 to 0.730, inside the intervals). From memory
+the published BEIR BM25 figure for SciFact is about 0.665, close to ours; check the BEIR paper before quoting it.
+Run with `PYTHONPATH=. python benchmarks/scifact/run_scifact.py` (downloads nothing itself; the dataset zip goes
+in `benchmarks/scifact/data/`, which is gitignored along with the cached embeddings). An answer-quality benchmark
+such as QASPER has not been run.
 
 ## Limitations
 
