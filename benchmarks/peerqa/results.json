@@ -1,0 +1,15 @@
+{
+ "model": "llama3.1:8b",
+ "n_questions": 194,
+ "n_answerable": 148,
+ "n_unanswerable": 46,
+ "unanswerable_refused": 36,
+ "answerable_wrongly_refused": 92,
+ "answerability_precision": 0.28125,
+ "answerability_recall": 0.782608695652174,
+ "answerability_f1": 0.4137931034482759,
+ "answerability_accuracy": 0.4742268041237113,
+ "rouge_l_all_answerable": 0.09085782196308627,
+ "rouge_l_when_answered": 0.24012424375958516,
+ "mean_latency_s_when_generated": 44.93962264150943
+}
