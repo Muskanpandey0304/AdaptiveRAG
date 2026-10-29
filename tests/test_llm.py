@@ -9,19 +9,21 @@ instead of failing, mirroring the spec's "skipped if no key" intent.
 import ollama
 import pytest
 
+from src.config import LLM_MODEL
 from src.llm import generate
 
 
 def _ollama_available() -> bool:
-    """Return True only if a local Ollama server responds."""
+    """True only if a local Ollama server responds and has the configured model pulled."""
     try:
-        ollama.list()
-        return True
+        pulled = [m.model for m in ollama.list().models]
     except Exception:
         return False
+    wanted = LLM_MODEL if ":" in LLM_MODEL else f"{LLM_MODEL}:latest"
+    return wanted in pulled
 
 
-@pytest.mark.skipif(not _ollama_available(), reason="no local Ollama server running")
+@pytest.mark.skipif(not _ollama_available(), reason="no local Ollama server, or the configured model is not pulled")
 def test_generate_returns_nonempty_text() -> None:
     """A basic call should succeed and return a non-empty answer."""
     result = generate("Say OK")

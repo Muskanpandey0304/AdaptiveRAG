@@ -20,7 +20,7 @@ load_dotenv()
 # --- Secrets / provider selection (never hardcode these) -------------------
 
 LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama")
-LLM_MODEL: str = os.getenv("LLM_MODEL", "llama3.1")
+LLM_MODEL: str = os.getenv("LLM_MODEL", "llama3.2:3b")
 API_KEY: str = os.getenv("API_KEY", "")
 
 # --- Generation limits --------------------------------------------------------

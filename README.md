@@ -27,7 +27,7 @@ production service. It has no authentication or deployment hardening.
 py -3.10 -m venv venv && venv\Scripts\activate     # macOS/Linux: python3.10 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ollama pull llama3.2:3b                            # install Ollama first
-cp .env.example .env                               # then set LLM_MODEL=llama3.2:3b in .env (copy on Windows: copy .env.example .env)
+cp .env.example .env                               # Windows: copy .env.example .env
 python -m src.download_papers                      # fetches the 26 papers into data/raw/
 python -m src.ingest && python -m src.indexer      # PDF -> Markdown -> chunks -> indexes (Markdown conversion took about 1.3 hours on CPU)
 streamlit run app.py                               # ask questions in the browser
@@ -118,7 +118,7 @@ Install Ollama separately and pull a model before running anything that
 calls the LLM:
 
 ```bash
-ollama pull llama3.1
+ollama pull llama3.2:3b
 ```
 
 ## Running each step
@@ -621,8 +621,8 @@ such as QASPER has not been run.
 - **Corpus:** the 26 papers are listed in `data/papers.txt` (arXiv id and title). `python -m src.download_papers`
   fetches those exact versions into `data/raw/`. Then `python -m src.ingest` and `python -m src.indexer` rebuild the index.
 - **Models (Ollama):** `llama3.2:3b` (digest `a80c4f17acd5`) for the default numbers and `llama3.1:8b` (digest
-  `46e0c10c039e`) for the 8B comparison and any figure marked 8B. Set `LLM_MODEL` in `.env`; `.env.example` shows
-  `llama3.1`, so set it to `llama3.2:3b` to match the headline numbers. Embeddings `intfloat/e5-base-v2`, reranker
+  `46e0c10c039e`) for the 8B comparison and any figure marked 8B. Set `LLM_MODEL` in `.env`; the default and
+  `.env.example` are `llama3.2:3b`, which matches the headline numbers. Embeddings `intfloat/e5-base-v2`, reranker
   `BAAI/bge-reranker-base`.
 - **Determinism:** LLM temperature is 0 and the bootstrap intervals use a fixed seed (0). Even so, the same config
   scored 16/27 in one run and 20/27 in another early on (see DECISIONS.md), so expect a few answers of difference
