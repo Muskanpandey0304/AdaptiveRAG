@@ -10,6 +10,7 @@ from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from src.config import (
     CANDIDATES_K,
+    EMBED_DEVICE,
     EMBED_MODEL,
     QUERY_PREFIX,
     RERANK_MODEL,
@@ -125,13 +126,13 @@ class Retriever:
     @property
     def embed_model(self) -> SentenceTransformer:
         if self._embed_model is None:
-            self._embed_model = SentenceTransformer(EMBED_MODEL)
+            self._embed_model = SentenceTransformer(EMBED_MODEL, device=EMBED_DEVICE)
         return self._embed_model
 
     @property
     def reranker(self) -> CrossEncoder:
         if self._reranker is None:
-            self._reranker = CrossEncoder(RERANK_MODEL)
+            self._reranker = CrossEncoder(RERANK_MODEL, device=EMBED_DEVICE)
         return self._reranker
 
     def _query_vector(self, query: str) -> np.ndarray:

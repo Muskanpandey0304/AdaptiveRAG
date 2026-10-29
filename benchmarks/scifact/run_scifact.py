@@ -26,7 +26,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
-from src.config import CANDIDATES_K, DOC_PREFIX, EMBED_MODEL, QUERY_PREFIX, RERANK_MODEL, RERANK_POOL_K
+from src.config import CANDIDATES_K, DOC_PREFIX, EMBED_DEVICE, EMBED_MODEL, QUERY_PREFIX, RERANK_MODEL, RERANK_POOL_K
 from src.eval import bootstrap_ci
 from src.indexer import tokenize
 from src.retrievers import _fuse_rrf
@@ -90,10 +90,10 @@ def main() -> None:
     ids, texts, queries, qrels = load()
     print(f"{len(ids)} docs, {len(queries)} test queries", flush=True)
 
-    model = SentenceTransformer(EMBED_MODEL)
+    model = SentenceTransformer(EMBED_MODEL, device=EMBED_DEVICE)
     doc_vectors = embed_corpus(model, texts)
     bm25 = BM25Okapi([tokenize(t) for t in texts])
-    reranker = CrossEncoder(RERANK_MODEL)
+    reranker = CrossEncoder(RERANK_MODEL, device=EMBED_DEVICE)
 
     per_query: dict[str, dict[str, list[float]]] = {
         name: {"ndcg": [], "recall": []} for name in ("BM25", "Dense (e5-base-v2)", "Hybrid (RRF)", "Hybrid + rerank")

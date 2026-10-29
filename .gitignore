@@ -15,3 +15,8 @@ eval/generation/
 benchmarks/*/data/
 benchmarks/*/index/
 venv_gpu/
+benchmarks/*/cache/
+# PeerQA files that copy dataset text (CC BY-NC-SA); prepare.py recreates questions.json
+benchmarks/peerqa/questions.json
+benchmarks/peerqa/answers.json
+benchmarks/peerqa/quote_answers.json

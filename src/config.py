@@ -89,6 +89,11 @@ LLM_TEMPERATURE = 0.0
 # them from the score distributions embed_bench prints.
 EMBED_MODEL: str = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")
 
+# Device for the embedding model and the reranker: "cpu" (default) or "cuda". Kept on CPU by default
+# because the GPU is shared with Ollama; retrieval-only runs and benchmarks set EMBED_DEVICE=cuda
+# (needs a CUDA build of torch, e.g. venv_gpu) for a 4-4.6x speed-up.
+EMBED_DEVICE: str = os.getenv("EMBED_DEVICE", "cpu")
+
 # Models are trained with their own query/passage templates; using the wrong
 # one silently costs accuracy. model -> (query prefix, passage prefix).
 # BGE: only queries get an instruction. E5: both sides are tagged.

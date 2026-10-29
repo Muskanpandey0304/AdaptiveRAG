@@ -13,7 +13,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
-from src.config import CHILD_OVERLAP, CHILD_TOKENS, CHUNK_OVERLAP, CHUNK_TOKENS, DOC_PREFIX, EMBED_MODEL
+from src.config import CHILD_OVERLAP, CHILD_TOKENS, CHUNK_OVERLAP, CHUNK_TOKENS, DOC_PREFIX, EMBED_DEVICE, EMBED_MODEL
 from src.ingest import contextualize
 
 CHUNKS_PATH = Path("data/index/chunks.json")
@@ -44,7 +44,7 @@ def build_vector_index(chunks: list[dict]) -> faiss.Index:
     similarity, so a plain IndexFlatIP can be used instead of a slower
     similarity computation.
     """
-    model = SentenceTransformer(EMBED_MODEL)
+    model = SentenceTransformer(EMBED_MODEL, device=EMBED_DEVICE)
     texts = [DOC_PREFIX + contextualize(chunk) for chunk in chunks]
     embeddings = model.encode(texts, normalize_embeddings=True, batch_size=32, show_progress_bar=True)
     embeddings = np.asarray(embeddings, dtype="float32")
