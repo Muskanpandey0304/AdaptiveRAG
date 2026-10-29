@@ -1,0 +1,28 @@
+# The 26 arXiv papers this project indexes: <arXiv id with version><TAB><title>.
+# The PDFs are not in the repo; fetch them with `python -m src.download_papers`.
+1904.09675v3	BERTSCORE: EVALUATING TEXT GENERATION WITH BERT
+1905.00537v3	SuperGLUE: A Stickier Benchmark for General-Purpose Language Understanding Systems
+1905.07830v1	HellaSwag: Can a Machine Really Finish Your Sentence?
+2009.03300v3	MEASURING MASSIVE MULTITASK LANGUAGE UNDERSTANDING
+2103.03874v2	Measuring Mathematical Problem Solving With the MATH Dataset
+2104.08663v4	BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models
+2107.03374v2	Evaluating Large Language Models Trained on Code
+2109.07958v2	TruthfulQA: Measuring How Models Mimic Human Falsehoods
+2110.14168v2	Training Verifiers to Solve Math Word Problems
+2206.04615v3	Beyond the Imitation Game: Quantifying and extrapolating the capabilities of language models
+2211.09110v2	Holistic Evaluation of Language Models
+2303.08896v3	SELFCHECKGPT: Zero-Resource Black-Box Hallucination Detection for Generative Large Language Models
+2303.16634v3	G-EVAL: NLG Evaluation using GPT-4 with Better Human Alignment
+2305.11747v3	HaluEval: A Large-Scale Hallucination Evaluation Benchmark for Large Language Models
+2305.17926v2	Large Language Models are not Fair Evaluators
+2306.05685v4	Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena
+2309.15217v2	Ragas: Automated Evaluation of Retrieval Augmented Generation
+2310.06770v3	SWE-BENCH: CAN LANGUAGE MODELS RESOLVE REAL-WORLD GITHUB ISSUES?
+2310.08491v2	PROMETHEUS: INDUCING FINE-GRAINED EVALUATION CAPABILITY IN LANGUAGE MODELS
+2311.07911v1	Instruction-Following Evaluation for Large Language Models
+2311.09476v2	ARES: An Automated Evaluation Framework for Retrieval-Augmented Generation Systems
+2403.04132v1	Chatbot Arena: An Open Platform for Evaluating LLMs by Human Preference
+2403.07974v2	LiveCodeBench: Holistic and Contamination Free Evaluation of Large Language Models for Code
+2404.04475v2	Length-Controlled AlpacaEval: A Simple Way to Debias Automatic Evaluators
+2406.01574v6	MMLU-Pro: A More Robust and Challenging Multi-Task Language Understanding Benchmark
+2411.15594v6	A Survey on LLM-as-a-Judge

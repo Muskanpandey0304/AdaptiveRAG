@@ -593,6 +593,35 @@ such as QASPER has not been run.
 - No authentication, concurrency control, or deployment hardening — this
   is a learning project, not a production service.
 
+## Reproducing the results
+
+- **Setup used:** Windows 11, Python 3.10.11, i7-9750H, GTX 1650 (4 GB), versions pinned in `requirements.txt`.
+  The GPU runs (SciFact embeddings) used a second environment with CUDA torch (2.11.0+cu128) and `EMBED_DEVICE=cuda`;
+  everything else ran on CPU.
+- **Corpus:** the 26 papers are listed in `data/papers.txt` (arXiv id and title). `python -m src.download_papers`
+  fetches those exact versions into `data/raw/`. Then `python -m src.ingest` and `python -m src.indexer` rebuild the index.
+- **Models (Ollama):** `llama3.2:3b` (digest `a80c4f17acd5`) for the default numbers and `llama3.1:8b` (digest
+  `46e0c10c039e`) for the 8B comparison and any figure marked 8B. Set `LLM_MODEL` in `.env`; `.env.example` shows
+  `llama3.1`, so set it to `llama3.2:3b` to match the headline numbers. Embeddings `intfloat/e5-base-v2`, reranker
+  `BAAI/bge-reranker-base`.
+- **Determinism:** LLM temperature is 0 and the bootstrap intervals use a fixed seed (0). Even so, the same config
+  scored 16/27 in one run and 20/27 in another early on (see DECISIONS.md), so expect a few answers of difference
+  between runs, and treat gaps of 3-4 answers on these small sets as noise.
+- **Commands:** `python -m src.eval` (retrieval and answers on `eval/questions.json`), `python -m src.eval --questions
+  eval/heldout_questions.json` (held-out), `python -m src.eval_generation heldout A_v1r_full --model llama3.1:8b`
+  (generation settings on cached retrieval). The question files, answer patterns and hard-negative sets are in `eval/`.
+- **SciFact:** download the BEIR SciFact zip into `benchmarks/scifact/data/` and run
+  `PYTHONPATH=. python benchmarks/scifact/run_scifact.py` (CUDA is optional; set `EMBED_DEVICE=cuda` in the GPU environment).
+
+## Data, models and licenses
+
+- **Papers:** not redistributed. Each is an arXiv paper under its own licence; `data/papers.txt` and the download script
+  fetch them from arXiv.
+- **SciFact:** claims CC BY 4.0, abstracts ODC-By 1.0 (the SciFact authors' terms); only scripts and scores are in this repo.
+- **Models:** built with Llama. `llama3.1` and `llama3.2` are used under Meta's Llama Community Licenses (download them
+  through Ollama; none are bundled here). `e5-base-v2` and `bge-reranker-base` are MIT.
+- **This repository's code** is MIT licensed (see `LICENSE`). Its dependencies are permissive too (Apache-2.0, MIT, BSD); see `requirements.txt`.
+
 ## Related work
 
 - **[adaptive-rag-engine](https://pypi.org/project/adaptive-rag-engine/)**
